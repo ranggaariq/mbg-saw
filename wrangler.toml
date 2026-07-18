@@ -6,4 +6,4 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "mbg-saw-db"
-database_id = "placeholder-id-replace-with-actual"
+database_id = "2e7cbf20-53a8-4a8f-98d3-fcc6916e9a65"
