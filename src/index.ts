@@ -486,14 +486,15 @@ app.get('/respondents', requireStaff, async (c) => {
 // ==============================
 // GET /evaluate - Form Evaluasi
 // ==============================
-app.get('/evaluate', requireStaff, async (c) => {
+app.get('/evaluate', async (c) => {
   const evaluasiEnabled = await getEvaluasiEnabled(c)
+  const staff = await isStaff(c)
   if (!evaluasiEnabled) {
     const content = `<div class="max-w-xl mx-auto mt-20 text-center text-gray-400">
       <p class="text-xl mb-2">Form Evaluasi sedang dinonaktifkan.</p>
       <p class="text-sm">Hubungi staff untuk mengaktifkan kembali lewat Manajemen Data Master.</p>
     </div>`
-    return c.html(Layout({ title: 'Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff: true }))
+    return c.html(Layout({ title: 'Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff }))
   }
   try {
     const { results: respondents } = await c.env.DB.prepare('SELECT id, name, school FROM respondents ORDER BY CAST(SUBSTR(id, 2) AS INTEGER) ASC').all<{ id: string; name: string; school?: string }>()
@@ -527,10 +528,22 @@ app.get('/evaluate', requireStaff, async (c) => {
       `
     }).join('')
 
+    const publicUrl = new URL('/evaluate', c.req.url).toString()
+    const shareBox = staff ? `
+      <div class="bg-indigo-950/30 border border-indigo-800/50 rounded-xl p-4 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div>
+          <p class="text-sm font-medium text-indigo-300">🔗 Link publik form ini (bisa dibagikan ke responden):</p>
+          <p id="shareUrl" class="text-xs text-gray-400 font-mono break-all">${publicUrl}</p>
+        </div>
+        <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('shareUrl').textContent); this.textContent='✅ Tersalin'" class="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm">📋 Salin Link</button>
+      </div>
+    ` : ''
+
     const content = `
       <div class="max-w-3xl mx-auto">
         <h2 class="text-3xl font-bold text-white mb-2">Form Evaluasi Responden</h2>
         <p class="text-gray-400 mb-8">Isi nilai evaluasi kepuasan program MBG untuk setiap kriteria (1-4).</p>
+        ${shareBox}
 
         <form id="evaluationForm" class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-xl">
           <div class="mb-8">
@@ -595,7 +608,7 @@ app.get('/evaluate', requireStaff, async (c) => {
       </script>
     `
 
-    return c.html(Layout({ title: 'Form Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff: true }))
+    return c.html(Layout({ title: 'Form Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff }))
   } catch (e: any) {
     return c.text('Error loading evaluation form: ' + e.message, 500)
   }
@@ -604,7 +617,7 @@ app.get('/evaluate', requireStaff, async (c) => {
 // ==============================
 // POST /evaluate - Simpan Evaluasi (Manual Form)
 // ==============================
-app.post('/evaluate', requireStaff, async (c) => {
+app.post('/evaluate', async (c) => {
   try {
     const body = await c.req.json()
     const { respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score } = body

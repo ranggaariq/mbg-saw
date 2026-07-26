@@ -59,14 +59,14 @@ CREATE TABLE IF NOT EXISTS saw_results (
 );
 
 -- DML: Criteria Seed Data (Total Bobot = 1.0)
-INSERT INTO criteria (id, name, weight, type) VALUES ('C1', 'Kualitas Makanan', 0.20, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C2', 'Nilai Gizi Makanan', 0.15, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C3', 'Kuantitas / Porsi', 0.15, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C4', 'Ketepatan Waktu', 0.10, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C5', 'Variasi Menu', 0.10, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C6', 'Higienitas & Keamanan Pangan', 0.15, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C7', 'Kemasan', 0.05, 'Benefit');
-INSERT INTO criteria (id, name, weight, type) VALUES ('C8', 'Pelayanan Petugas', 0.10, 'Benefit');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C1', 'Kualitas Makanan', 0.20, 'Benefit', 'Bagaimana penilaian Anda terhadap kualitas rasa makanan yang disajikan dalam program MBG?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C2', 'Nilai Gizi Makanan', 0.15, 'Benefit', 'Menurut Anda, seberapa baik kandungan gizi (nutrisi) dari makanan yang diberikan?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C3', 'Kuantitas / Porsi', 0.15, 'Benefit', 'Bagaimana penilaian Anda terhadap porsi/jumlah makanan yang diterima, apakah sudah cukup mengenyangkan?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C4', 'Ketepatan Waktu', 0.10, 'Benefit', 'Seberapa tepat waktu penyajian atau pembagian makanan MBG dilaksanakan?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C5', 'Variasi Menu', 0.10, 'Benefit', 'Bagaimana penilaian Anda terhadap variasi menu makanan yang disajikan (tidak monoton)?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C6', 'Higienitas & Keamanan Pangan', 0.15, 'Benefit', 'Bagaimana penilaian Anda terhadap kebersihan dan keamanan pangan (higienitas) makanan yang disajikan?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C7', 'Kemasan', 0.05, 'Benefit', 'Bagaimana penilaian Anda terhadap kemasan makanan yang digunakan (kebersihan, kepraktisan, dan daya tahan)?');
+INSERT INTO criteria (id, name, weight, type, question) VALUES ('C8', 'Pelayanan Petugas', 0.10, 'Benefit', 'Bagaimana penilaian Anda terhadap pelayanan petugas yang membagikan makanan?');
 
 -- DML: Settings Seed Data
 INSERT INTO settings (key, value) VALUES ('evaluasi_menu_enabled', '0');
