@@ -106,6 +106,34 @@ const Layout = (props: { title: string; content: string; activePage: string; sta
   `
 }
 
+const BareLayout = (props: { title: string; content: string }) => {
+  return html`
+    <!DOCTYPE html>
+    <html lang="id">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${props.title} - SPK MBG SAW</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+      <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        body { font-family: 'Inter', sans-serif; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeIn 0.4s ease-out; }
+      </style>
+    </head>
+    <body class="bg-gray-950 text-gray-100 min-h-screen">
+      <main class="p-8">
+        <div class="max-w-3xl mx-auto animate-in">
+          ${raw(props.content)}
+        </div>
+      </main>
+    </body>
+    </html>
+  `
+}
+
 // ==============================
 // GET /api/criteria-score-distribution - Dashboard drill-down data (public)
 // ==============================
@@ -494,7 +522,7 @@ app.get('/evaluate', async (c) => {
       <p class="text-xl mb-2">Form Evaluasi sedang dinonaktifkan.</p>
       <p class="text-sm">Hubungi staff untuk mengaktifkan kembali lewat Manajemen Data Master.</p>
     </div>`
-    return c.html(Layout({ title: 'Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff }))
+    return c.html(BareLayout({ title: 'Evaluasi', content }))
   }
   try {
     const { results: schools } = await c.env.DB.prepare('SELECT name FROM school_scopes ORDER BY name ASC').all<{ name: string }>()
@@ -627,7 +655,7 @@ app.get('/evaluate', async (c) => {
       </script>
     `
 
-    return c.html(Layout({ title: 'Form Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff }))
+    return c.html(BareLayout({ title: 'Form Evaluasi', content }))
   } catch (e: any) {
     return c.text('Error loading evaluation form: ' + e.message, 500)
   }
