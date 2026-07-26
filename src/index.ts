@@ -497,10 +497,10 @@ app.get('/evaluate', async (c) => {
     return c.html(Layout({ title: 'Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff }))
   }
   try {
-    const { results: respondents } = await c.env.DB.prepare('SELECT id, name, school FROM respondents ORDER BY CAST(SUBSTR(id, 2) AS INTEGER) ASC').all<{ id: string; name: string; school?: string }>()
+    const { results: schools } = await c.env.DB.prepare('SELECT name FROM school_scopes ORDER BY name ASC').all<{ name: string }>()
     const { results: criteria } = await c.env.DB.prepare('SELECT id, name, question FROM criteria ORDER BY id ASC').all<{ id: string; name: string; question?: string }>()
 
-    const respondentOptions = respondents.map(r => `<option value="${r.id}">${r.id} - ${r.name} (${r.school || 'Tanpa Sekolah'})</option>`).join('')
+    const schoolOptions = schools.map(s => `<option value="${s.name}">${s.name}</option>`).join('')
 
     const criteriaFields = criteria.map((cr, idx) => {
       const scoreOptions = [
@@ -546,12 +546,30 @@ app.get('/evaluate', async (c) => {
         ${shareBox}
 
         <form id="evaluationForm" class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-xl">
-          <div class="mb-8">
-            <label class="block mb-2 text-sm font-medium text-gray-300">Pilih Responden</label>
-            <select name="respondent_id" required class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-3">
-              <option value="">-- Pilih Responden --</option>
-              ${respondentOptions}
-            </select>
+          <div class="grid sm:grid-cols-2 gap-4 mb-8">
+            <div>
+              <label class="block mb-2 text-sm font-medium text-gray-300">Nama Lengkap</label>
+              <input type="text" name="name" required class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-3" />
+            </div>
+            <div>
+              <label class="block mb-2 text-sm font-medium text-gray-300">Email (opsional)</label>
+              <input type="email" name="email" class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-3" />
+            </div>
+            <div>
+              <label class="block mb-2 text-sm font-medium text-gray-300">Asal Sekolah</label>
+              <select name="school" required class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-3">
+                <option value="">-- Pilih Sekolah --</option>
+                ${schoolOptions}
+              </select>
+            </div>
+            <div>
+              <label class="block mb-2 text-sm font-medium text-gray-300">Tipe Responden</label>
+              <select name="consumer_type" required class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-full p-3">
+                <option value="">-- Pilih Tipe --</option>
+                <option value="Murid">Murid</option>
+                <option value="Staff">Staff</option>
+              </select>
+            </div>
           </div>
 
           <div class="space-y-6">
@@ -573,8 +591,9 @@ app.get('/evaluate', async (c) => {
           const formData = new FormData(e.target);
           const data = Object.fromEntries(formData.entries());
           
+          const textFields = ['name', 'email', 'school', 'consumer_type'];
           for (let key in data) {
-            if (key !== 'respondent_id') {
+            if (!textFields.includes(key)) {
               data[key] = parseInt(data[key]);
             }
           }
@@ -615,15 +634,60 @@ app.get('/evaluate', async (c) => {
 })
 
 // ==============================
-// POST /evaluate - Simpan Evaluasi (Manual Form)
+// Shared helpers: find-or-create respondent, upsert evaluation scores
+// ==============================
+async function findOrCreateRespondentId(c: any, opts: { name: string; email?: string; school?: string; consumer_type: string }): Promise<string> {
+  if (opts.email) {
+    const existing = await c.env.DB.prepare('SELECT id FROM respondents WHERE email = ?').bind(opts.email).first<{ id: string }>()
+    if (existing) return existing.id
+  }
+  const lastRow = await c.env.DB.prepare('SELECT id FROM respondents ORDER BY CAST(SUBSTR(id, 2) AS INTEGER) DESC LIMIT 1').first<{ id: string }>()
+  let nextNum = 1
+  if (lastRow && lastRow.id.startsWith('A')) {
+    nextNum = parseInt(lastRow.id.substring(1)) + 1
+  } else {
+    const countRow = await c.env.DB.prepare('SELECT COUNT(*) as total FROM respondents').first<{ total: number }>()
+    nextNum = (countRow?.total || 0) + 1
+  }
+  const respondentId = `A${nextNum}`
+  await c.env.DB.prepare(`
+    INSERT INTO respondents (id, name, email, school, consumer_type)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      name = excluded.name, email = excluded.email, school = excluded.school, consumer_type = excluded.consumer_type
+  `).bind(respondentId, opts.name, opts.email || '', opts.school || '', opts.consumer_type).run()
+  return respondentId
+}
+
+async function upsertEvaluationScores(c: any, respondentId: string, scores: number[]) {
+  await c.env.DB.prepare(`
+    INSERT INTO evaluations (respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(respondent_id) DO UPDATE SET
+      c1_score = excluded.c1_score,
+      c2_score = excluded.c2_score,
+      c3_score = excluded.c3_score,
+      c4_score = excluded.c4_score,
+      c5_score = excluded.c5_score,
+      c6_score = excluded.c6_score,
+      c7_score = excluded.c7_score,
+      c8_score = excluded.c8_score
+  `).bind(respondentId, ...scores).run()
+}
+
+// ==============================
+// POST /evaluate - Simpan Evaluasi (Form Publik - self registration)
 // ==============================
 app.post('/evaluate', async (c) => {
   try {
     const body = await c.req.json()
-    const { respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score } = body
+    const { name, email, school, consumer_type, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score } = body
 
-    if (!respondent_id) {
-      return c.json({ success: false, error: 'respondent_id wajib diisi' }, 400)
+    if (!name || !school || !consumer_type) {
+      return c.json({ success: false, error: 'Nama, asal sekolah, dan tipe responden wajib diisi' }, 400)
+    }
+    if (consumer_type !== 'Murid' && consumer_type !== 'Staff') {
+      return c.json({ success: false, error: 'Tipe responden harus Murid atau Staff' }, 400)
     }
 
     const scores = [c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score]
@@ -631,26 +695,10 @@ app.post('/evaluate', async (c) => {
       return c.json({ success: false, error: 'Semua skor harus berupa angka antara 1 dan 4' }, 400)
     }
 
-    const respondent = await c.env.DB.prepare('SELECT id FROM respondents WHERE id = ?').bind(respondent_id).first()
-    if (!respondent) {
-      return c.json({ success: false, error: 'Responden tidak ditemukan' }, 400)
-    }
+    const respondentId = await findOrCreateRespondentId(c, { name, email, school, consumer_type })
+    await upsertEvaluationScores(c, respondentId, scores)
 
-    await c.env.DB.prepare(`
-      INSERT INTO evaluations (respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(respondent_id) DO UPDATE SET
-        c1_score = excluded.c1_score,
-        c2_score = excluded.c2_score,
-        c3_score = excluded.c3_score,
-        c4_score = excluded.c4_score,
-        c5_score = excluded.c5_score,
-        c6_score = excluded.c6_score,
-        c7_score = excluded.c7_score,
-        c8_score = excluded.c8_score
-    `).bind(respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score).run()
-
-    return c.json({ success: true, message: 'Evaluasi berhasil disimpan' })
+    return c.json({ success: true, message: 'Evaluasi berhasil disimpan', respondent_id: respondentId })
   } catch (e: any) {
     return c.json({ success: false, error: e.message }, 500)
   }
