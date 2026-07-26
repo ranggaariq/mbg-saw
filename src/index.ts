@@ -1,9 +1,13 @@
 import { Hono } from 'hono'
 import { html, raw } from 'hono/html'
 import { cors } from 'hono/cors'
+import { getSignedCookie, setSignedCookie, deleteCookie } from 'hono/cookie'
 
 type Bindings = {
   DB: D1Database
+  STAFF_USERNAME: string
+  STAFF_PASSWORD: string
+  SESSION_SECRET: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -13,18 +17,43 @@ app.use('/api/*', cors())
 app.use('/evaluate', cors())
 
 // ==============================
+// Auth: single staff credential via env secrets, signed cookie session
+// ==============================
+const SESSION_COOKIE = 'mbg_staff_session'
+
+async function isStaff(c: any): Promise<boolean> {
+  const value = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE)
+  return value === 'staff'
+}
+
+async function requireStaff(c: any, next: any) {
+  if (await isStaff(c)) return next()
+  return c.redirect(`/login?redirect=${encodeURIComponent(c.req.path)}`)
+}
+
+async function getEvaluasiEnabled(c: any): Promise<boolean> {
+  const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'evaluasi_menu_enabled'").first<{ value: string }>()
+  return row?.value === '1'
+}
+
+// ==============================
 // Layout Component
 // ==============================
-const navLinks = [
-  { path: '/', label: 'Dashboard', icon: '📊' },
-  { path: '/criteria', label: 'Data Kriteria', icon: '📝' },
-  { path: '/respondents', label: 'Responden', icon: '👥' },
-  { path: '/evaluate', label: 'Evaluasi', icon: '⭐' },
-  { path: '/saw-calculate', label: 'Hitung SAW', icon: '🧮' },
-  { path: '/results', label: 'Hasil Keputusan', icon: '🏆' },
-]
-
-const Layout = (props: { title: string; content: string; activePage: string }) => {
+const Layout = (props: { title: string; content: string; activePage: string; staff?: boolean; evaluasiEnabled?: boolean }) => {
+  const staff = !!props.staff
+  const evaluasiEnabled = props.evaluasiEnabled !== false
+  const navLinks = [
+    { path: '/', label: 'Dashboard', icon: '📊' },
+    { path: '/criteria', label: 'Data Kriteria', icon: '📝' },
+    { path: '/respondents', label: 'Responden', icon: '👥' },
+    ...(evaluasiEnabled ? [{ path: '/evaluate', label: 'Evaluasi', icon: '⭐' }] : []),
+    { path: '/saw-calculate', label: 'Hitung SAW', icon: '🧮' },
+    { path: '/results', label: 'Hasil Keputusan', icon: '🏆' },
+    ...(staff ? [
+      { path: '/master/schools', label: 'Lingkup Sekolah', icon: '🏫' },
+      { path: '/master/criteria', label: 'Manage Kriteria', icon: '⚙️' },
+    ] : []),
+  ]
   const navItems = navLinks.map(link => {
     const isActive = props.activePage === link.path
     const cls = isActive
@@ -43,6 +72,7 @@ const Layout = (props: { title: string; content: string; activePage: string }) =
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
       <script src="https://cdn.tailwindcss.com"></script>
+      <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
       <style>
         body { font-family: 'Inter', sans-serif; }
         .glass-panel { background: rgba(31, 41, 55, 0.7); backdrop-filter: blur(10px); }
@@ -59,7 +89,10 @@ const Layout = (props: { title: string; content: string; activePage: string }) =
         <nav class="flex-1 p-4 space-y-2">
           ${raw(navItems)}
         </nav>
-        <div class="p-4 border-t border-gray-800">
+        <div class="p-4 border-t border-gray-800 space-y-3">
+          ${staff
+            ? `<form method="post" action="/logout"><button type="submit" class="w-full text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg py-2 transition-colors">🔓 Logout Staff</button></form>`
+            : `<a href="/login" class="block text-center text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg py-2 transition-colors">🔒 Login Staff</a>`}
           <p class="text-xs text-gray-600 text-center">© 2025 SPK MBG SAW</p>
         </div>
       </aside>
@@ -74,6 +107,64 @@ const Layout = (props: { title: string; content: string; activePage: string }) =
 }
 
 // ==============================
+// GET /api/criteria-score-distribution - Dashboard drill-down data (public)
+// ==============================
+app.get('/api/criteria-score-distribution', async (c) => {
+  const criteriaId = (c.req.query('criteria_id') || 'C1').toLowerCase()
+  const column = `${criteriaId}_score`
+  if (!/^c[1-8]_score$/.test(column)) return c.json({ error: 'invalid criteria_id' }, 400)
+  const { results } = await c.env.DB.prepare(
+    `SELECT ${column} as score, COUNT(*) as count FROM evaluations GROUP BY ${column} ORDER BY ${column}`
+  ).all<{ score: number; count: number }>()
+  return c.json({ criteria_id: criteriaId.toUpperCase(), distribution: results })
+})
+
+// ==============================
+// GET/POST /login, POST /logout - Staff Auth
+// ==============================
+app.get('/login', async (c) => {
+  const redirect = c.req.query('redirect') || '/'
+  const error = c.req.query('error')
+  const content = `
+    <div class="max-w-md mx-auto mt-20">
+      <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-xl">
+        <h2 class="text-2xl font-bold text-white mb-6">Login Staff</h2>
+        ${error ? `<p class="text-red-400 text-sm mb-4">Username atau password salah.</p>` : ''}
+        <form method="post" action="/login">
+          <input type="hidden" name="redirect" value="${redirect}" />
+          <label class="block text-sm text-gray-400 mb-1">Username</label>
+          <input type="text" name="username" required class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-2.5 mb-4" />
+          <label class="block text-sm text-gray-400 mb-1">Password</label>
+          <input type="password" name="password" required class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-2.5 mb-6" />
+          <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg font-medium">Login</button>
+        </form>
+      </div>
+    </div>
+  `
+  const evaluasiEnabled = await getEvaluasiEnabled(c)
+  return c.html(Layout({ title: 'Login', content, activePage: '/login', evaluasiEnabled, staff: await isStaff(c) }))
+})
+
+app.post('/login', async (c) => {
+  const body = await c.req.parseBody()
+  const username = String(body.username || '')
+  const password = String(body.password || '')
+  const redirect = String(body.redirect || '/')
+  if (username === c.env.STAFF_USERNAME && password === c.env.STAFF_PASSWORD) {
+    await setSignedCookie(c, SESSION_COOKIE, 'staff', c.env.SESSION_SECRET, {
+      httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 60 * 60 * 8,
+    })
+    return c.redirect(redirect)
+  }
+  return c.redirect(`/login?error=1&redirect=${encodeURIComponent(redirect)}`)
+})
+
+app.post('/logout', async (c) => {
+  deleteCookie(c, SESSION_COOKIE, { path: '/' })
+  return c.redirect('/')
+})
+
+// ==============================
 // GET / - Dashboard
 // ==============================
 app.get('/', async (c) => {
@@ -81,6 +172,13 @@ app.get('/', async (c) => {
     const respondentsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM respondents').first<{ count: number }>()
     const evaluationsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM evaluations').first<{ count: number }>()
     const resultsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM saw_results').first<{ count: number }>()
+
+    const { results: levelCounts } = await c.env.DB.prepare(
+      "SELECT satisfaction_level, COUNT(*) as count FROM saw_results GROUP BY satisfaction_level"
+    ).all<{ satisfaction_level: string; count: number }>()
+    const levelData = ['K1', 'K2', 'K3', 'K4'].map(lvl => levelCounts.find(r => r.satisfaction_level === lvl)?.count || 0)
+    const { results: allCriteria } = await c.env.DB.prepare('SELECT id, name FROM criteria ORDER BY id ASC').all<{ id: string; name: string }>()
+    const criteriaOptions = allCriteria.map(cr => `<option value="${cr.id}">${cr.id} - ${cr.name}</option>`).join('')
 
     const content = `
       <h2 class="text-3xl font-bold mb-2 text-white">Dashboard Overview</h2>
@@ -106,7 +204,59 @@ app.get('/', async (c) => {
           <p class="text-xs text-gray-500 mt-2">Sudah dihitung SAW</p>
         </div>
       </div>
-      
+
+      <div class="grid md:grid-cols-2 gap-6 mb-8">
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+          <h3 class="text-lg font-bold text-white mb-1">Distribusi Hasil Keputusan</h3>
+          <p class="text-xs text-gray-500 mb-4">Klik salah satu bagian untuk melihat distribusi skor per kriteria</p>
+          <canvas id="decisionPie" class="max-h-64"></canvas>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6" id="criteriaPieWrap" style="display:none">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-bold text-white">Distribusi Skor per Kriteria</h3>
+            <select id="criteriaSelect" class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg p-2">${criteriaOptions}</select>
+          </div>
+          <canvas id="criteriaPie" class="max-h-64"></canvas>
+        </div>
+      </div>
+      <script>
+        const decisionCtx = document.getElementById('decisionPie').getContext('2d')
+        const decisionChart = new Chart(decisionCtx, {
+          type: 'pie',
+          data: {
+            labels: ['K1 (Sangat Puas)', 'K2 (Puas)', 'K3 (Tidak Puas)', 'K4 (Sangat Tidak Puas)'],
+            datasets: [{ data: ${JSON.stringify(levelData)}, backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'] }]
+          },
+          options: {
+            plugins: { legend: { labels: { color: '#9ca3af' } } },
+            onClick: (evt, els) => { if (els.length) showCriteriaPie(document.getElementById('criteriaSelect').value) }
+          }
+        })
+
+        const criteriaPieWrap = document.getElementById('criteriaPieWrap')
+        const criteriaSelect = document.getElementById('criteriaSelect')
+        let criteriaChart = null
+
+        async function showCriteriaPie(criteriaId) {
+          criteriaPieWrap.style.display = 'block'
+          const res = await fetch('/api/criteria-score-distribution?criteria_id=' + criteriaId)
+          const json = await res.json()
+          const dataMap = { 1: 0, 2: 0, 3: 0, 4: 0 }
+          json.distribution.forEach(d => { dataMap[d.score] = d.count })
+          const ctx = document.getElementById('criteriaPie').getContext('2d')
+          if (criteriaChart) criteriaChart.destroy()
+          criteriaChart = new Chart(ctx, {
+            type: 'pie',
+            data: {
+              labels: ['1 - Sangat Tidak Baik', '2 - Tidak Baik', '3 - Baik', '4 - Sangat Baik'],
+              datasets: [{ data: [dataMap[1], dataMap[2], dataMap[3], dataMap[4]], backgroundColor: ['#ef4444', '#f59e0b', '#3b82f6', '#10b981'] }]
+            },
+            options: { plugins: { legend: { labels: { color: '#9ca3af' } } } }
+          })
+        }
+        criteriaSelect.addEventListener('change', (e) => showCriteriaPie(e.target.value))
+      </script>
+
       <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8">
         <h3 class="text-xl font-bold mb-4 text-white">Sistem Evaluasi Program Makan Bergizi Gratis (MBG)</h3>
         <p class="text-gray-400 leading-relaxed mb-6">
@@ -142,7 +292,8 @@ app.get('/', async (c) => {
       </div>
     `
 
-    return c.html(Layout({ title: 'Dashboard', content, activePage: '/' }))
+    const evaluasiEnabled = await getEvaluasiEnabled(c)
+    return c.html(Layout({ title: 'Dashboard', content, activePage: '/', evaluasiEnabled, staff: await isStaff(c) }))
   } catch (e: any) {
     return c.text('Error: ' + e.message, 500)
   }
@@ -151,7 +302,7 @@ app.get('/', async (c) => {
 // ==============================
 // GET /criteria - Tabel Kriteria
 // ==============================
-app.get('/criteria', async (c) => {
+app.get('/criteria', requireStaff, async (c) => {
   try {
     const { results } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; name: string; weight: number; type: string }>()
 
@@ -201,7 +352,8 @@ app.get('/criteria', async (c) => {
       </div>
     `
 
-    return c.html(Layout({ title: 'Data Kriteria', content, activePage: '/criteria' }))
+    const evaluasiEnabled = await getEvaluasiEnabled(c)
+    return c.html(Layout({ title: 'Data Kriteria', content, activePage: '/criteria', evaluasiEnabled, staff: true }))
   } catch (e: any) {
     return c.text('Error loading criteria: ' + e.message, 500)
   }
@@ -210,7 +362,7 @@ app.get('/criteria', async (c) => {
 // ==============================
 // GET /respondents - Tabel Responden (Ditambahkan Sekolah & Email)
 // ==============================
-app.get('/respondents', async (c) => {
+app.get('/respondents', requireStaff, async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const typeFilter = c.req.query('type') || ''
   const searchFilter = c.req.query('search') || ''
@@ -325,7 +477,8 @@ app.get('/respondents', async (c) => {
       ${pagination}
     `
 
-    return c.html(Layout({ title: 'Data Responden', content, activePage: '/respondents' }))
+    const evaluasiEnabled = await getEvaluasiEnabled(c)
+    return c.html(Layout({ title: 'Data Responden', content, activePage: '/respondents', evaluasiEnabled, staff: true }))
   } catch (e: any) {
     return c.text('Error loading respondents: ' + e.message, 500)
   }
@@ -334,10 +487,18 @@ app.get('/respondents', async (c) => {
 // ==============================
 // GET /evaluate - Form Evaluasi
 // ==============================
-app.get('/evaluate', async (c) => {
+app.get('/evaluate', requireStaff, async (c) => {
+  const evaluasiEnabled = await getEvaluasiEnabled(c)
+  if (!evaluasiEnabled) {
+    const content = `<div class="max-w-xl mx-auto mt-20 text-center text-gray-400">
+      <p class="text-xl mb-2">Form Evaluasi sedang dinonaktifkan.</p>
+      <p class="text-sm">Hubungi staff untuk mengaktifkan kembali lewat Manajemen Data Master.</p>
+    </div>`
+    return c.html(Layout({ title: 'Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff: true }))
+  }
   try {
     const { results: respondents } = await c.env.DB.prepare('SELECT id, name, school FROM respondents ORDER BY CAST(SUBSTR(id, 2) AS INTEGER) ASC').all<{ id: string; name: string; school?: string }>()
-    const { results: criteria } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; name: string }>()
+    const { results: criteria } = await c.env.DB.prepare('SELECT id, name, question FROM criteria ORDER BY id ASC').all<{ id: string; name: string; question?: string }>()
 
     const respondentOptions = respondents.map(r => `<option value="${r.id}">${r.id} - ${r.name} (${r.school || 'Tanpa Sekolah'})</option>`).join('')
 
@@ -359,7 +520,7 @@ app.get('/evaluate', async (c) => {
 
       return `
         <div class="p-5 border border-gray-800 rounded-xl bg-gray-950/50">
-          <p class="font-medium text-gray-200 mb-4"><span class="text-indigo-400 font-bold">${cr.id}</span> - ${cr.name}</p>
+          <p class="font-medium text-gray-200 mb-4"><span class="text-indigo-400 font-bold">${cr.id}</span> - ${cr.question || cr.name}</p>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             ${scoreOptions}
           </div>
@@ -435,7 +596,7 @@ app.get('/evaluate', async (c) => {
       </script>
     `
 
-    return c.html(Layout({ title: 'Form Evaluasi', content, activePage: '/evaluate' }))
+    return c.html(Layout({ title: 'Form Evaluasi', content, activePage: '/evaluate', evaluasiEnabled, staff: true }))
   } catch (e: any) {
     return c.text('Error loading evaluation form: ' + e.message, 500)
   }
@@ -444,7 +605,7 @@ app.get('/evaluate', async (c) => {
 // ==============================
 // POST /evaluate - Simpan Evaluasi (Manual Form)
 // ==============================
-app.post('/evaluate', async (c) => {
+app.post('/evaluate', requireStaff, async (c) => {
   try {
     const body = await c.req.json()
     const { respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score } = body
@@ -565,7 +726,7 @@ app.post('/api/gform-webhook', async (c) => {
 // ==============================
 // GET /saw-calculate - Hitung SAW
 // ==============================
-app.get('/saw-calculate', async (c) => {
+app.get('/saw-calculate', requireStaff, async (c) => {
   try {
     const { results: criteria } = await c.env.DB.prepare('SELECT id, weight FROM criteria ORDER BY id ASC').all<{ id: string; weight: number }>()
     if (criteria.length !== 8) {
@@ -583,7 +744,7 @@ app.get('/saw-calculate', async (c) => {
           <a href="/evaluate" class="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-6 rounded-xl transition-colors">Isi Evaluasi</a>
         </div>
       `
-      return c.html(Layout({ title: 'Error', content, activePage: '/saw-calculate' }))
+      return c.html(Layout({ title: 'Error', content, activePage: '/saw-calculate', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
     }
 
     const maxScores = [0, 0, 0, 0, 0, 0, 0, 0]
@@ -635,7 +796,7 @@ app.get('/saw-calculate', async (c) => {
       </div>
     `
 
-    return c.html(Layout({ title: 'Perhitungan Berhasil', content, activePage: '/saw-calculate' }))
+    return c.html(Layout({ title: 'Perhitungan Berhasil', content, activePage: '/saw-calculate', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
   } catch (e: any) {
     const content = `
       <div class="max-w-md mx-auto mt-20 text-center bg-gray-900 border border-red-800/50 p-8 rounded-2xl shadow-2xl">
@@ -644,19 +805,109 @@ app.get('/saw-calculate', async (c) => {
         <p class="text-gray-400">${e.message}</p>
       </div>
     `
-    return c.html(Layout({ title: 'Error', content, activePage: '/saw-calculate' }))
+    return c.html(Layout({ title: 'Error', content, activePage: '/saw-calculate', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
   }
 })
 
 // ==============================
 // GET /results - Hasil Keputusan (Ditambahkan Kolom Sekolah & Email)
 // ==============================
-app.get('/results', async (c) => {
+app.get('/results', requireStaff, async (c) => {
   const page = parseInt(c.req.query('page') || '1')
   const levelFilter = c.req.query('level') || ''
   const typeFilter = c.req.query('type') || ''
+  const tab = c.req.query('tab') || 'summary'
   const limit = 50
   const offset = (page - 1) * limit
+
+  const tabClass = (t: string) => t === tab ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+  const tabsNav = `
+    <div class="flex gap-2 mb-6">
+      <a href="/results?tab=summary" class="px-4 py-2 rounded-lg text-sm ${tabClass('summary')}">Ringkasan</a>
+      <a href="/results?tab=kriteria" class="px-4 py-2 rounded-lg text-sm ${tabClass('kriteria')}">Per Kriteria</a>
+      <a href="/results?tab=responden" class="px-4 py-2 rounded-lg text-sm ${tabClass('responden')}">Per Responden</a>
+    </div>
+  `
+
+  if (tab === 'kriteria') {
+    try {
+      const { results: criteria } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; name: string; weight: number }>()
+      const { results: evaluations } = await c.env.DB.prepare('SELECT * FROM evaluations').all<any>()
+      const rows = criteria.map((cr, idx) => {
+        const col = `c${idx + 1}_score`
+        const scores = evaluations.map(e => e[col] as number)
+        const avgRaw = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
+        const max = scores.length ? Math.max(...scores) : 0
+        const avgNorm = max === 0 ? 0 : avgRaw / max
+        const contribution = avgNorm * cr.weight
+        return `
+          <tr class="hover:bg-gray-800/50 transition-colors">
+            <td class="p-4 font-bold text-indigo-400">${cr.id}</td>
+            <td class="p-4 text-gray-200">${cr.name}</td>
+            <td class="p-4 text-white">${avgRaw.toFixed(2)}</td>
+            <td class="p-4 text-white">${avgNorm.toFixed(3)}</td>
+            <td class="p-4 text-gray-400">${cr.weight}</td>
+            <td class="p-4 font-bold text-emerald-400">${contribution.toFixed(3)}</td>
+          </tr>
+        `
+      }).join('')
+      const content = `
+        ${tabsNav}
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
+          <table class="w-full text-left">
+            <thead class="bg-gray-950 border-b border-gray-800">
+              <tr>
+                <th class="p-4 font-semibold text-gray-400 text-sm">Kode</th>
+                <th class="p-4 font-semibold text-gray-400 text-sm">Kriteria</th>
+                <th class="p-4 font-semibold text-gray-400 text-sm">Avg Skor</th>
+                <th class="p-4 font-semibold text-gray-400 text-sm">Avg Normalisasi</th>
+                <th class="p-4 font-semibold text-gray-400 text-sm">Bobot</th>
+                <th class="p-4 font-semibold text-gray-400 text-sm">Kontribusi</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-800">${rows || '<tr><td colspan="6" class="p-8 text-center text-gray-500">Belum ada data evaluasi</td></tr>'}</tbody>
+          </table>
+        </div>
+      `
+      return c.html(Layout({ title: 'Hasil per Kriteria', content, activePage: '/results', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
+    } catch (e: any) {
+      return c.text('Error loading kriteria breakdown: ' + e.message, 500)
+    }
+  }
+
+  if (tab === 'responden') {
+    try {
+      const { results: criteria } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; weight: number }>()
+      const { results: evaluations } = await c.env.DB.prepare(
+        'SELECT e.*, r.name, sr.final_score FROM evaluations e JOIN respondents r ON r.id = e.respondent_id LEFT JOIN saw_results sr ON sr.respondent_id = e.respondent_id ORDER BY CAST(SUBSTR(e.respondent_id, 2) AS INTEGER) ASC'
+      ).all<any>()
+      const maxes = criteria.map((_, idx) => {
+        const scores = evaluations.map(e => e[`c${idx + 1}_score`] as number)
+        return scores.length ? Math.max(...scores) : 0
+      })
+      const header = criteria.map(cr => `<th class="p-3 text-gray-400 text-xs">${cr.id}</th>`).join('')
+      const rows = evaluations.map(e => {
+        const cells = criteria.map((cr, idx) => {
+          const raw = e[`c${idx + 1}_score`] as number
+          const contribution = maxes[idx] === 0 ? 0 : (raw / maxes[idx]) * cr.weight
+          return `<td class="p-3 text-sm text-gray-300">${raw} <span class="text-gray-500">(${contribution.toFixed(3)})</span></td>`
+        }).join('')
+        return `<tr class="hover:bg-gray-800/50 transition-colors"><td class="p-3 text-sm font-mono text-gray-500">${e.respondent_id}</td><td class="p-3 text-sm text-gray-200">${e.name}</td>${cells}<td class="p-3 text-sm font-bold text-emerald-400">${(e.final_score ?? 0).toFixed(3)}</td></tr>`
+      }).join('')
+      const content = `
+        ${tabsNav}
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto shadow-xl">
+          <table class="w-full text-left">
+            <thead class="bg-gray-950 border-b border-gray-800"><tr><th class="p-3 text-gray-400 text-xs">ID</th><th class="p-3 text-gray-400 text-xs">Nama</th>${header}<th class="p-3 text-gray-400 text-xs">Final Score</th></tr></thead>
+            <tbody class="divide-y divide-gray-800">${rows || `<tr><td colspan="${criteria.length + 3}" class="p-8 text-center text-gray-500">Belum ada data evaluasi</td></tr>`}</tbody>
+          </table>
+        </div>
+      `
+      return c.html(Layout({ title: 'Hasil per Responden', content, activePage: '/results', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
+    } catch (e: any) {
+      return c.text('Error loading responden breakdown: ' + e.message, 500)
+    }
+  }
 
   try {
     const whereClause: string[] = []
@@ -749,6 +1000,7 @@ app.get('/results', async (c) => {
     ` : ''
 
     const content = `
+      ${tabsNav}
       <!-- Statistics Cards -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <div class="bg-gray-900 border border-gray-800 p-5 rounded-xl text-center hover:border-emerald-800/50 transition-all">
@@ -815,10 +1067,105 @@ app.get('/results', async (c) => {
       ${pagination}
     `
 
-    return c.html(Layout({ title: 'Hasil Keputusan', content, activePage: '/results' }))
+    return c.html(Layout({ title: 'Hasil Keputusan', content, activePage: '/results', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
   } catch (e: any) {
     return c.text('Error loading results: ' + e.message, 500)
   }
+})
+
+// ==============================
+// Manajemen Data Master (staff-only)
+// ==============================
+app.get('/master/schools', requireStaff, async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM school_scopes ORDER BY name ASC').all<{ id: number; name: string }>()
+  const rows = results.map(r => `
+    <tr class="hover:bg-gray-800/50 transition-colors">
+      <td class="p-4 text-gray-200">${r.name}</td>
+      <td class="p-4 text-right">
+        <form method="post" action="/master/schools/${r.id}/delete" onsubmit="return confirm('Hapus ${r.name}?')">
+          <button type="submit" class="text-red-400 hover:text-red-300 text-sm">Hapus</button>
+        </form>
+      </td>
+    </tr>
+  `).join('')
+  const evaluasiEnabled = await getEvaluasiEnabled(c)
+  const content = `
+    <h2 class="text-3xl font-bold text-white mb-6">Manage Lingkup Sekolah</h2>
+    <form method="post" action="/master/toggle-evaluasi" class="mb-6">
+      <button type="submit" class="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm border border-gray-700">
+        Toggle Menu Evaluasi (saat ini: ${evaluasiEnabled ? 'Aktif ✅' : 'Nonaktif ❌'})
+      </button>
+    </form>
+    <form method="post" action="/master/schools" class="flex gap-2 mb-6">
+      <input type="text" name="name" required placeholder="Nama sekolah" class="flex-1 bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5" />
+      <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg">Tambah</button>
+    </form>
+    <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
+      <table class="w-full text-left">
+        <thead class="bg-gray-950 border-b border-gray-800"><tr><th class="p-4 text-gray-400 text-sm">Nama Sekolah</th><th></th></tr></thead>
+        <tbody class="divide-y divide-gray-800">${rows || '<tr><td colspan="2" class="p-8 text-center text-gray-500">Belum ada data</td></tr>'}</tbody>
+      </table>
+    </div>
+  `
+  return c.html(Layout({ title: 'Lingkup Sekolah', content, activePage: '/master/schools', evaluasiEnabled, staff: true }))
+})
+
+app.post('/master/schools', requireStaff, async (c) => {
+  const body = await c.req.parseBody()
+  const name = String(body.name || '').trim()
+  if (name) await c.env.DB.prepare('INSERT OR IGNORE INTO school_scopes (name) VALUES (?)').bind(name).run()
+  return c.redirect('/master/schools')
+})
+
+app.post('/master/schools/:id/delete', requireStaff, async (c) => {
+  await c.env.DB.prepare('DELETE FROM school_scopes WHERE id = ?').bind(c.req.param('id')).run()
+  return c.redirect('/master/schools')
+})
+
+app.post('/master/toggle-evaluasi', requireStaff, async (c) => {
+  const enabled = await getEvaluasiEnabled(c)
+  await c.env.DB.prepare("UPDATE settings SET value = ? WHERE key = 'evaluasi_menu_enabled'").bind(enabled ? '0' : '1').run()
+  return c.redirect('/master/schools')
+})
+
+app.get('/master/criteria', requireStaff, async (c) => {
+  const { results } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; name: string; weight: number; type: string; question: string | null }>()
+  const totalWeight = results.reduce((s, r) => s + r.weight, 0)
+  const warn = Math.abs(totalWeight - 1.0) > 0.001
+  const rows = results.map(r => `
+    <form method="post" action="/master/criteria/${r.id}" class="p-5 border border-gray-800 rounded-xl bg-gray-950/50 mb-4">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="text-indigo-400 font-bold">${r.id}</span>
+        <input type="text" name="name" value="${r.name}" required class="flex-1 bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm" />
+        <input type="number" step="0.01" name="weight" value="${r.weight}" required class="w-24 bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm" />
+        <select name="type" class="bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm">
+          <option value="Benefit" ${r.type === 'Benefit' ? 'selected' : ''}>Benefit</option>
+          <option value="Cost" ${r.type === 'Cost' ? 'selected' : ''}>Cost</option>
+        </select>
+      </div>
+      <textarea name="question" placeholder="Pertanyaan untuk form evaluasi" class="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm mb-3">${r.question || ''}</textarea>
+      <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm">Simpan</button>
+    </form>
+  `).join('')
+  const evaluasiEnabled = await getEvaluasiEnabled(c)
+  const content = `
+    <h2 class="text-3xl font-bold text-white mb-2">Manage Kriteria</h2>
+    <p class="text-gray-400 mb-2">Total bobot = ${totalWeight.toFixed(2)}</p>
+    ${warn ? `<p class="text-amber-400 text-sm mb-4">⚠ Total bobot tidak sama dengan 1.0</p>` : ''}
+    ${rows}
+  `
+  return c.html(Layout({ title: 'Manage Kriteria', content, activePage: '/master/criteria', evaluasiEnabled, staff: true }))
+})
+
+app.post('/master/criteria/:id', requireStaff, async (c) => {
+  const body = await c.req.parseBody()
+  const id = c.req.param('id')
+  const name = String(body.name || '')
+  const weight = parseFloat(String(body.weight || '0'))
+  const type = String(body.type || 'Benefit')
+  const question = String(body.question || '')
+  await c.env.DB.prepare('UPDATE criteria SET name = ?, weight = ?, type = ?, question = ? WHERE id = ?').bind(name, weight, type, question, id).run()
+  return c.redirect('/master/criteria')
 })
 
 export default app
