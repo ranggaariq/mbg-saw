@@ -90,9 +90,9 @@ const Layout = (props: { title: string; content: string; activePage: string; sta
           ${raw(navItems)}
         </nav>
         <div class="p-4 border-t border-gray-800 space-y-3">
-          ${staff
+          ${raw(staff
             ? `<form method="post" action="/logout"><button type="submit" class="w-full text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg py-2 transition-colors">🔓 Logout Staff</button></form>`
-            : `<a href="/login" class="block text-center text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg py-2 transition-colors">🔒 Login Staff</a>`}
+            : `<a href="/login" class="block text-center text-sm text-gray-400 hover:text-white bg-gray-800 hover:bg-gray-700 rounded-lg py-2 transition-colors">🔒 Login Staff</a>`)}
           <p class="text-xs text-gray-600 text-center">© 2025 SPK MBG SAW</p>
         </div>
       </aside>
