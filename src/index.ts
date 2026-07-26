@@ -208,10 +208,10 @@ app.get('/', async (c) => {
       <div class="grid md:grid-cols-2 gap-6 mb-8">
         <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
           <h3 class="text-lg font-bold text-white mb-1">Distribusi Hasil Keputusan</h3>
-          <p class="text-xs text-gray-500 mb-4">Klik salah satu bagian untuk melihat distribusi skor per kriteria</p>
+          <p class="text-xs text-gray-500 mb-4">Klik salah satu bagian untuk ganti kriteria di sebelah kanan</p>
           <canvas id="decisionPie" class="max-h-64"></canvas>
         </div>
-        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6" id="criteriaPieWrap" style="display:none">
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl p-6" id="criteriaPieWrap">
           <div class="flex justify-between items-center mb-4">
             <h3 class="text-lg font-bold text-white">Distribusi Skor per Kriteria</h3>
             <select id="criteriaSelect" class="bg-gray-950 border border-gray-700 text-white text-sm rounded-lg p-2">${criteriaOptions}</select>
@@ -233,12 +233,10 @@ app.get('/', async (c) => {
           }
         })
 
-        const criteriaPieWrap = document.getElementById('criteriaPieWrap')
         const criteriaSelect = document.getElementById('criteriaSelect')
         let criteriaChart = null
 
         async function showCriteriaPie(criteriaId) {
-          criteriaPieWrap.style.display = 'block'
           const res = await fetch('/api/criteria-score-distribution?criteria_id=' + criteriaId)
           const json = await res.json()
           const dataMap = { 1: 0, 2: 0, 3: 0, 4: 0 }
@@ -255,6 +253,7 @@ app.get('/', async (c) => {
           })
         }
         criteriaSelect.addEventListener('change', (e) => showCriteriaPie(e.target.value))
+        showCriteriaPie(criteriaSelect.value)
       </script>
 
       <div class="bg-gray-900 border border-gray-800 rounded-2xl p-8">

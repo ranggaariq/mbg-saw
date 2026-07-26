@@ -69,7 +69,7 @@ INSERT INTO criteria (id, name, weight, type) VALUES ('C7', 'Kemasan', 0.05, 'Be
 INSERT INTO criteria (id, name, weight, type) VALUES ('C8', 'Pelayanan Petugas', 0.10, 'Benefit');
 
 -- DML: Settings Seed Data
-INSERT INTO settings (key, value) VALUES ('evaluasi_menu_enabled', '1');
+INSERT INTO settings (key, value) VALUES ('evaluasi_menu_enabled', '0');
 
 -- DML: Lingkup Sekolah Seed Data
 INSERT INTO school_scopes (name) VALUES ('SMKN 1 CIOMAS'), ('SMAN 1 CIOMAS'), ('SMP IBG'), ('SDN 08'), ('SDN 05'), ('SDN 02');
