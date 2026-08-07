@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "db:init": "wrangler d1 execute mbg-saw-db --local --file=./schema.sql"
+    "db:init": "wrangler d1 execute mbg-saw-db --local --file=./schema_part1.sql && wrangler d1 execute mbg-saw-db --local --file=./schema_part2.sql"
   },
   "dependencies": {
     "hono": "^4.6.0"
