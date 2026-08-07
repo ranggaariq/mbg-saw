@@ -47,11 +47,9 @@ const Layout = (props: { title: string; content: string; activePage: string; sta
     { path: '/criteria', label: 'Data Kriteria', icon: '📝' },
     { path: '/respondents', label: 'Responden', icon: '👥' },
     ...(evaluasiEnabled ? [{ path: '/evaluate', label: 'Evaluasi', icon: '⭐' }] : []),
-    { path: '/saw-calculate', label: 'Hitung SAW', icon: '🧮' },
     { path: '/results', label: 'Hasil Keputusan', icon: '🏆' },
     ...(staff ? [
       { path: '/master/schools', label: 'Lingkup Sekolah', icon: '🏫' },
-      { path: '/master/criteria', label: 'Manage Kriteria', icon: '⚙️' },
     ] : []),
   ]
   const navItems = navLinks.map(link => {
@@ -73,6 +71,9 @@ const Layout = (props: { title: string; content: string; activePage: string; sta
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
       <script src="https://cdn.tailwindcss.com"></script>
       <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.4/jspdf.plugin.autotable.min.js"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
       <style>
         body { font-family: 'Inter', sans-serif; }
         .glass-panel { background: rgba(31, 41, 55, 0.7); backdrop-filter: blur(10px); }
@@ -138,13 +139,12 @@ const BareLayout = (props: { title: string; content: string }) => {
 // GET /api/criteria-score-distribution - Dashboard drill-down data (public)
 // ==============================
 app.get('/api/criteria-score-distribution', async (c) => {
-  const criteriaId = (c.req.query('criteria_id') || 'C1').toLowerCase()
-  const column = `${criteriaId}_score`
-  if (!/^c[1-8]_score$/.test(column)) return c.json({ error: 'invalid criteria_id' }, 400)
+  const criteriaId = (c.req.query('criteria_id') || 'C1').toUpperCase()
+  if (!/^C\d+$/.test(criteriaId)) return c.json({ error: 'invalid criteria_id' }, 400)
   const { results } = await c.env.DB.prepare(
-    `SELECT ${column} as score, COUNT(*) as count FROM evaluations GROUP BY ${column} ORDER BY ${column}`
-  ).all<{ score: number; count: number }>()
-  return c.json({ criteria_id: criteriaId.toUpperCase(), distribution: results })
+    `SELECT value as score, COUNT(*) as count FROM evaluations WHERE criteria_id = ? GROUP BY value ORDER BY value`
+  ).bind(criteriaId).all<{ score: number; count: number }>()
+  return c.json({ criteria_id: criteriaId, distribution: results })
 })
 
 // ==============================
@@ -198,7 +198,7 @@ app.post('/logout', async (c) => {
 app.get('/', async (c) => {
   try {
     const respondentsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM respondents').first<{ count: number }>()
-    const evaluationsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM evaluations').first<{ count: number }>()
+    const evaluationsCount = await c.env.DB.prepare('SELECT COUNT(DISTINCT respondent_id) as count FROM evaluations').first<{ count: number }>()
     const resultsCount = await c.env.DB.prepare('SELECT COUNT(*) as count FROM saw_results').first<{ count: number }>()
 
     const { results: levelCounts } = await c.env.DB.prepare(
@@ -313,8 +313,7 @@ app.get('/', async (c) => {
           </div>
         </div>
         <div class="flex flex-wrap gap-4">
-          <a href="/saw-calculate" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-medium transition-all shadow-lg shadow-indigo-900/30">🧮 Jalankan Perhitungan SAW</a>
-          <a href="/results" class="bg-gray-800 hover:bg-gray-700 text-white px-6 py-3 rounded-lg font-medium transition-colors border border-gray-700">🏆 Lihat Laporan Hasil</a>
+          <a href="/results" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-medium transition-all shadow-lg shadow-indigo-900/30">🏆 Lihat Laporan Hasil</a>
         </div>
       </div>
     `
@@ -348,9 +347,18 @@ app.get('/criteria', requireStaff, async (c) => {
                 <span class="text-xs text-gray-400 font-mono w-10">${(row.weight * 100).toFixed(0)}%</span>
               </div>
             </td>
+            <td class="p-4">
+              <div class="flex gap-2">
+                <a href="/criteria/edit?id=${row.id}" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">Edit</a>
+                <form method="post" action="/criteria/delete" onsubmit="return confirm('Hapus kriteria ${row.id} - ${row.name}?')" class="inline">
+                  <input type="hidden" name="id" value="${row.id}" />
+                  <button type="submit" class="bg-red-600/20 hover:bg-red-600/40 text-red-400 px-3 py-1.5 rounded-lg text-xs font-medium border border-red-800/50 transition-colors">Hapus</button>
+                </form>
+              </div>
+            </td>
           </tr>
         `).join('')
-      : '<tr><td colspan="5" class="p-8 text-center text-gray-500">Tidak ada data kriteria</td></tr>'
+      : '<tr><td colspan="6" class="p-8 text-center text-gray-500">Tidak ada data kriteria</td></tr>'
 
     const totalWeight = results.reduce((sum, r) => sum + r.weight, 0)
 
@@ -360,6 +368,7 @@ app.get('/criteria', requireStaff, async (c) => {
           <h2 class="text-3xl font-bold text-white">Data Kriteria</h2>
           <p class="text-gray-400 mt-1">8 kriteria evaluasi program MBG dengan total bobot = ${totalWeight.toFixed(2)}</p>
         </div>
+        <a href="/criteria/add" class="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white px-5 py-2.5 rounded-lg font-medium transition-all shadow-lg shadow-indigo-900/30">+ Tambah Kriteria</a>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
         <table class="w-full text-left">
@@ -370,6 +379,7 @@ app.get('/criteria', requireStaff, async (c) => {
               <th class="p-4 font-semibold text-gray-400 text-sm">Bobot</th>
               <th class="p-4 font-semibold text-gray-400 text-sm">Tipe</th>
               <th class="p-4 font-semibold text-gray-400 text-sm">Visualisasi Bobot</th>
+              <th class="p-4 font-semibold text-gray-400 text-sm">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-800">
@@ -384,6 +394,145 @@ app.get('/criteria', requireStaff, async (c) => {
   } catch (e: any) {
     return c.text('Error loading criteria: ' + e.message, 500)
   }
+})
+
+// ==============================
+// GET /criteria/add - Form Tambah Kriteria
+// ==============================
+app.get('/criteria/add', requireStaff, async (c) => {
+  const { results: allCriteria } = await c.env.DB.prepare('SELECT id FROM criteria ORDER BY id ASC').all<{ id: string }>()
+  const maxNum = allCriteria.reduce((max, cr) => { const n = parseInt(cr.id.replace(/\D/g, '')); return isNaN(n) ? max : Math.max(max, n) }, 0)
+  const nextCode = `C${maxNum + 1}`
+  const sumRow = await c.env.DB.prepare('SELECT SUM(weight) as total FROM criteria').first<{ total: number | null }>()
+  const usedWeight = sumRow?.total ?? 0
+  const maxWeight = Math.max(0, 1.0 - usedWeight)
+  const content = `
+    <div class="max-w-xl mx-auto">
+      <h2 class="text-3xl font-bold text-white mb-2">Tambah Kriteria Baru</h2>
+      <p class="text-gray-400 mb-6">Sisa bobot tersedia: <strong class="text-indigo-400">${maxWeight.toFixed(2)}</strong></p>
+      <form method="post" action="/criteria/add" class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-xl space-y-4">
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Kode</label>
+          <input type="text" name="id" required value="${nextCode}" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" />
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Nama Kriteria</label>
+          <input type="text" name="name" required class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" />
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Bobot (maks ${maxWeight.toFixed(2)})</label>
+          <input type="number" name="weight" step="0.01" min="0.01" max="${maxWeight}" required value="${maxWeight.toFixed(2)}" oninput="this.setCustomValidity(this.value > ${maxWeight} ? 'Maksimal ${maxWeight.toFixed(2)}' : '')" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" />
+          <p id="weightHint" class="text-xs text-gray-500 mt-1">Sisa bobot tersedia: ${maxWeight.toFixed(2)}</p>
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Tipe</label>
+          <select name="type" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3">
+            <option value="Benefit">Benefit</option>
+            <option value="Cost">Cost</option>
+          </select>
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Pertanyaan Evaluasi</label>
+          <textarea name="question" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" rows="3"></textarea>
+        </div>
+        <div class="flex gap-3 pt-2">
+          <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors">Simpan</button>
+          <a href="/criteria" class="bg-gray-800 hover:bg-gray-700 text-white px-6 py-3 rounded-lg transition-colors border border-gray-700">Batal</a>
+        </div>
+      </form>
+    </div>
+  `
+  const evaluasiEnabled = await getEvaluasiEnabled(c)
+  return c.html(Layout({ title: 'Tambah Kriteria', content, activePage: '/criteria', evaluasiEnabled, staff: true }))
+})
+
+app.post('/criteria/add', requireStaff, async (c) => {
+  const body = await c.req.parseBody()
+  const id = String(body.id || '').trim().toUpperCase()
+  const name = String(body.name || '').trim()
+  const weight = parseFloat(String(body.weight || '0'))
+  const type = String(body.type || 'Benefit')
+  const question = String(body.question || '').trim()
+  if (!id || !name || isNaN(weight) || weight <= 0) return c.redirect('/criteria/add')
+  const sumRow = await c.env.DB.prepare('SELECT SUM(weight) as total FROM criteria').first<{ total: number | null }>()
+  const maxWeight = Math.max(0, 1.0 - (sumRow?.total ?? 0))
+  if (weight > maxWeight) return c.redirect('/criteria/add')
+  await c.env.DB.prepare('INSERT INTO criteria (id, name, weight, type, question) VALUES (?, ?, ?, ?, ?)').bind(id, name, weight, type, question).run()
+  return c.redirect('/criteria')
+})
+
+// ==============================
+// GET /criteria/edit - Form Edit Kriteria
+// ==============================
+app.get('/criteria/edit', requireStaff, async (c) => {
+  const id = c.req.query('id')
+  if (!id) return c.redirect('/criteria')
+  const row = await c.env.DB.prepare('SELECT * FROM criteria WHERE id = ?').bind(id).first<{ id: string; name: string; weight: number; type: string; question: string | null }>()
+  if (!row) return c.redirect('/criteria')
+  const sumRow = await c.env.DB.prepare('SELECT SUM(weight) as total FROM criteria').first<{ total: number | null }>()
+  const usedWeight = sumRow?.total ?? 0
+  const maxWeight = Math.max(0, 1.0 - (usedWeight - row.weight))
+  const content = `
+    <div class="max-w-xl mx-auto">
+      <h2 class="text-3xl font-bold text-white mb-2">Edit Kriteria ${row.id}</h2>
+      <p class="text-gray-400 mb-6">Maks bobot: <strong class="text-indigo-400">${maxWeight.toFixed(2)}</strong></p>
+      <form method="post" action="/criteria/edit" class="bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-xl space-y-4">
+        <input type="hidden" name="id" value="${row.id}" />
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Kode</label>
+          <input type="text" value="${row.id}" disabled class="w-full bg-gray-800 border border-gray-700 text-gray-500 rounded-lg p-3" />
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Nama Kriteria</label>
+          <input type="text" name="name" required value="${row.name}" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" />
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Bobot (maks ${maxWeight.toFixed(2)})</label>
+          <input type="number" name="weight" step="0.01" min="0.01" max="${maxWeight}" required value="${row.weight}" oninput="this.setCustomValidity(this.value > ${maxWeight} ? 'Maksimal ${maxWeight.toFixed(2)}' : '')" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" />
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Tipe</label>
+          <select name="type" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3">
+            <option value="Benefit" ${row.type === 'Benefit' ? 'selected' : ''}>Benefit</option>
+            <option value="Cost" ${row.type === 'Cost' ? 'selected' : ''}>Cost</option>
+          </select>
+        </div>
+        <div>
+          <label class="block mb-2 text-sm font-medium text-gray-300">Pertanyaan Evaluasi</label>
+          <textarea name="question" class="w-full bg-gray-950 border border-gray-700 text-white rounded-lg p-3" rows="3">${row.question || ''}</textarea>
+        </div>
+        <div class="flex gap-3 pt-2">
+          <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-lg font-medium transition-colors">Simpan</button>
+          <a href="/criteria" class="bg-gray-800 hover:bg-gray-700 text-white px-6 py-3 rounded-lg transition-colors border border-gray-700">Batal</a>
+        </div>
+      </form>
+    </div>
+  `
+  const evaluasiEnabled = await getEvaluasiEnabled(c)
+  return c.html(Layout({ title: 'Edit Kriteria', content, activePage: '/criteria', evaluasiEnabled, staff: true }))
+})
+
+app.post('/criteria/edit', requireStaff, async (c) => {
+  const body = await c.req.parseBody()
+  const id = String(body.id || '').trim()
+  const name = String(body.name || '').trim()
+  const weight = parseFloat(String(body.weight || '0'))
+  const type = String(body.type || 'Benefit')
+  const question = String(body.question || '').trim()
+  if (!id || !name || isNaN(weight) || weight <= 0) return c.redirect('/criteria')
+  const current = await c.env.DB.prepare('SELECT weight FROM criteria WHERE id = ?').bind(id).first<{ weight: number }>()
+  const sumRow = await c.env.DB.prepare('SELECT SUM(weight) as total FROM criteria').first<{ total: number | null }>()
+  const maxWeight = Math.max(0, 1.0 - ((sumRow?.total ?? 0) - (current?.weight ?? 0)))
+  if (weight > maxWeight) return c.redirect(`/criteria/edit?id=${id}`)
+  await c.env.DB.prepare('UPDATE criteria SET name = ?, weight = ?, type = ?, question = ? WHERE id = ?').bind(name, weight, type, question, id).run()
+  return c.redirect('/criteria')
+})
+
+app.post('/criteria/delete', requireStaff, async (c) => {
+  const body = await c.req.parseBody()
+  const id = String(body.id || '').trim()
+  if (id) await c.env.DB.prepare('DELETE FROM criteria WHERE id = ?').bind(id).run()
+  return c.redirect('/criteria')
 })
 
 // ==============================
@@ -425,6 +574,12 @@ app.get('/respondents', requireStaff, async (c) => {
     const totalPages = Math.ceil(total / limit)
 
     const { results } = await c.env.DB.prepare(query).bind(...params, limit, offset).all<{ id: string; name: string; email?: string; school?: string; consumer_type: string }>()
+
+    let allQuery = 'SELECT * FROM respondents'
+    if (whereClauses.length > 0) allQuery += ' WHERE ' + whereClauses.join(' AND ')
+    allQuery += ' ORDER BY CAST(SUBSTR(id, 2) AS INTEGER) ASC'
+    const { results: allRespondents } = await c.env.DB.prepare(allQuery).bind(...params).all<{ id: string; name: string; email?: string; school?: string; consumer_type: string }>()
+    const exportData = allRespondents.map(r => ({ ID: r.id, Nama: r.name, Email: r.email || '', 'Asal Sekolah': r.school || '', 'Tipe Konsumen': r.consumer_type }))
 
     const rows = results.length > 0
       ? results.map(row => {
@@ -484,6 +639,11 @@ app.get('/respondents', requireStaff, async (c) => {
           <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">Cari & Filter</button>
         </form>
       </div>
+      <div class="flex gap-2 mb-4">
+        <button onclick="exportCSV(_expData,'responden')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">CSV</button>
+        <button onclick="exportXLSX(_expData,'responden','Responden')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">XLSX</button>
+        <button onclick="exportPDF(_expData,'responden','Data Responden',['ID','Nama','Email','Asal Sekolah','Tipe Konsumen'])" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">PDF</button>
+      </div>
 
       <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto shadow-xl">
         <table class="w-full text-left">
@@ -502,6 +662,12 @@ app.get('/respondents', requireStaff, async (c) => {
         </table>
       </div>
       ${pagination}
+      <script>
+        window._expData=${JSON.stringify(exportData)};
+        function exportCSV(data,filename){if(!data.length)return;const h=Object.keys(data[0]);const csv=[h.join(','),...data.map(r=>h.map(k=>'"'+String(r[k]).replace(/"/g,'""')+'"').join(','))].join('\\n');const b=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=filename+'.csv';a.click()}
+        function exportXLSX(data,filename,sheet){const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,sheet);XLSX.writeFile(wb,filename+'.xlsx')}
+        function exportPDF(data,filename,title,cols){const doc=new jspdf.jsPDF({orientation:'landscape',unit:'mm',format:'a4'});doc.text(title,14,15);doc.autoTable({head:[cols],body:data.map(r=>cols.map(c=>r[c])),startY:20,styles:{fontSize:8}});doc.save(filename+'.pdf')}
+      </script>
     `
 
     const evaluasiEnabled = await getEvaluasiEnabled(c)
@@ -688,19 +854,13 @@ async function findOrCreateRespondentId(c: any, opts: { name: string; email?: st
 }
 
 async function upsertEvaluationScores(c: any, respondentId: string, scores: number[]) {
-  await c.env.DB.prepare(`
-    INSERT INTO evaluations (respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(respondent_id) DO UPDATE SET
-      c1_score = excluded.c1_score,
-      c2_score = excluded.c2_score,
-      c3_score = excluded.c3_score,
-      c4_score = excluded.c4_score,
-      c5_score = excluded.c5_score,
-      c6_score = excluded.c6_score,
-      c7_score = excluded.c7_score,
-      c8_score = excluded.c8_score
-  `).bind(respondentId, ...scores).run()
+  const stmts = scores.map((score, i) =>
+    c.env.DB.prepare(
+      `INSERT INTO evaluations (respondent_id, criteria_id, value) VALUES (?, ?, ?)
+       ON CONFLICT(respondent_id, criteria_id) DO UPDATE SET value = excluded.value`
+    ).bind(respondentId, `C${i + 1}`, score)
+  )
+  await c.env.DB.batch(stmts)
 }
 
 // ==============================
@@ -725,6 +885,7 @@ app.post('/evaluate', async (c) => {
 
     const respondentId = await findOrCreateRespondentId(c, { name, email, school, consumer_type })
     await upsertEvaluationScores(c, respondentId, scores)
+    await calculateSAW(c.env.DB)
 
     return c.json({ success: true, message: 'Evaluasi berhasil disimpan', respondent_id: respondentId })
   } catch (e: any) {
@@ -785,19 +946,8 @@ app.post('/api/gform-webhook', async (c) => {
     const allScoresPresent = scores.every(s => typeof s === 'number' && s >= 1 && s <= 4)
 
     if (allScoresPresent) {
-      await c.env.DB.prepare(`
-        INSERT INTO evaluations (respondent_id, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(respondent_id) DO UPDATE SET
-          c1_score = excluded.c1_score,
-          c2_score = excluded.c2_score,
-          c3_score = excluded.c3_score,
-          c4_score = excluded.c4_score,
-          c5_score = excluded.c5_score,
-          c6_score = excluded.c6_score,
-          c7_score = excluded.c7_score,
-          c8_score = excluded.c8_score
-      `).bind(respondentId, c1_score, c2_score, c3_score, c4_score, c5_score, c6_score, c7_score, c8_score).run()
+      await upsertEvaluationScores(c, respondentId, scores)
+      await calculateSAW(c.env.DB)
     }
 
     return c.json({
@@ -812,90 +962,59 @@ app.post('/api/gform-webhook', async (c) => {
 })
 
 // ==============================
-// GET /saw-calculate - Hitung SAW
+// Auto-calculate SAW helper
 // ==============================
-app.get('/saw-calculate', requireStaff, async (c) => {
-  try {
-    const { results: criteria } = await c.env.DB.prepare('SELECT id, weight FROM criteria ORDER BY id ASC').all<{ id: string; weight: number }>()
-    if (criteria.length !== 8) {
-      throw new Error('Kriteria harus berjumlah 8, ditemukan: ' + criteria.length)
-    }
-    const weights = criteria.map(cr => cr.weight)
+async function calculateSAW(db: D1Database) {
+  const { results: criteria } = await db.prepare('SELECT id, weight FROM criteria ORDER BY id ASC').all<{ id: string; weight: number }>()
+  if (criteria.length < 1) return
+  const criteriaIds = criteria.map(cr => cr.id)
+  const weights = criteria.map(cr => cr.weight)
 
-    const { results: evals } = await c.env.DB.prepare('SELECT * FROM evaluations').all()
-    if (evals.length === 0) {
-      const content = `
-        <div class="max-w-md mx-auto mt-20 text-center bg-gray-900 border border-red-800/50 p-8 rounded-2xl shadow-2xl">
-          <div class="text-4xl mb-4">⚠️</div>
-          <h2 class="text-xl font-bold text-red-400 mb-2">Belum Ada Data Evaluasi</h2>
-          <p class="text-gray-400 mb-6">Silakan isi form evaluasi terlebih dahulu sebelum menjalankan perhitungan SAW.</p>
-          <a href="/evaluate" class="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-6 rounded-xl transition-colors">Isi Evaluasi</a>
-        </div>
-      `
-      return c.html(Layout({ title: 'Error', content, activePage: '/saw-calculate', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
-    }
+  const { results: evalRows } = await db.prepare('SELECT respondent_id, criteria_id, value FROM evaluations').all<{ respondent_id: string; criteria_id: string; value: number }>()
+  if (evalRows.length === 0) return
 
-    const maxScores = [0, 0, 0, 0, 0, 0, 0, 0]
-    for (const ev of evals) {
-      for (let i = 1; i <= 8; i++) {
-        const val = ev[`c${i}_score`] as number
-        if (val > maxScores[i - 1]) maxScores[i - 1] = val
-      }
-    }
-
-    const stmtBase = `INSERT OR REPLACE INTO saw_results (respondent_id, final_score, satisfaction_level) VALUES (?, ?, ?)`
-    const statements = []
-
-    for (const ev of evals) {
-      let finalScore = 0
-      for (let i = 1; i <= 8; i++) {
-        const val = ev[`c${i}_score`] as number
-        const normalized = maxScores[i - 1] === 0 ? 0 : val / maxScores[i - 1]
-        finalScore += normalized * weights[i - 1]
-      }
-
-      let level = 'K4'
-      if (finalScore > 0.8) level = 'K1'
-      else if (finalScore > 0.6) level = 'K2'
-      else if (finalScore > 0.4) level = 'K3'
-
-      statements.push(
-        c.env.DB.prepare(stmtBase).bind(ev.respondent_id, finalScore, level)
-      )
-    }
-
-    const chunkSize = 100
-    for (let i = 0; i < statements.length; i += chunkSize) {
-      const chunk = statements.slice(i, i + chunkSize)
-      await c.env.DB.batch(chunk)
-    }
-
-    const content = `
-      <div class="max-w-md mx-auto mt-20 text-center bg-gray-900 border border-gray-800 p-8 rounded-2xl shadow-2xl">
-        <div class="w-20 h-20 bg-emerald-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
-          <span class="text-4xl">✅</span>
-        </div>
-        <h2 class="text-2xl font-bold text-white mb-2">Perhitungan SAW Selesai!</h2>
-        <p class="text-gray-400 mb-2">Total ${evals.length} data evaluasi berhasil diproses.</p>
-        <p class="text-gray-500 text-sm mb-8">Normalisasi matriks & pembobotan preferensi telah dihitung.</p>
-        <a href="/results" class="block w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-medium py-3 px-6 rounded-xl transition-all shadow-lg shadow-indigo-900/30">
-          🏆 Lihat Hasil Keputusan
-        </a>
-      </div>
-    `
-
-    return c.html(Layout({ title: 'Perhitungan Berhasil', content, activePage: '/saw-calculate', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
-  } catch (e: any) {
-    const content = `
-      <div class="max-w-md mx-auto mt-20 text-center bg-gray-900 border border-red-800/50 p-8 rounded-2xl shadow-2xl">
-        <div class="text-4xl mb-4">❌</div>
-        <h2 class="text-xl font-bold text-red-400 mb-2">Error Perhitungan</h2>
-        <p class="text-gray-400">${e.message}</p>
-      </div>
-    `
-    return c.html(Layout({ title: 'Error', content, activePage: '/saw-calculate', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
+  // Pivot: group by respondent
+  const byRespondent = new Map<string, Map<string, number>>()
+  for (const row of evalRows) {
+    if (!byRespondent.has(row.respondent_id)) byRespondent.set(row.respondent_id, new Map())
+    byRespondent.get(row.respondent_id)!.set(row.criteria_id, row.value)
   }
-})
+
+  // Max scores per criteria
+  const maxScores = new Map<string, number>()
+  for (const cid of criteriaIds) maxScores.set(cid, 0)
+  for (const [, scores] of byRespondent) {
+    for (const [cid, val] of scores) {
+      if (val > (maxScores.get(cid) || 0)) maxScores.set(cid, val)
+    }
+  }
+
+  const stmtBase = `INSERT OR REPLACE INTO saw_results (respondent_id, final_score, satisfaction_level) VALUES (?, ?, ?)`
+  const statements = []
+
+  for (const [respondentId, scores] of byRespondent) {
+    let finalScore = 0
+    for (let i = 0; i < criteriaIds.length; i++) {
+      const cid = criteriaIds[i]
+      const val = scores.get(cid) || 0
+      const max = maxScores.get(cid) || 0
+      const normalized = max === 0 ? 0 : val / max
+      finalScore += normalized * weights[i]
+    }
+
+    let level = 'K4'
+    if (finalScore > 0.8) level = 'K1'
+    else if (finalScore > 0.6) level = 'K2'
+    else if (finalScore > 0.4) level = 'K3'
+
+    statements.push(db.prepare(stmtBase).bind(respondentId, finalScore, level))
+  }
+
+  const chunkSize = 100
+  for (let i = 0; i < statements.length; i += chunkSize) {
+    await db.batch(statements.slice(i, i + chunkSize))
+  }
+}
 
 // ==============================
 // GET /results - Hasil Keputusan (Ditambahkan Kolom Sekolah & Email)
@@ -920,27 +1039,37 @@ app.get('/results', requireStaff, async (c) => {
   if (tab === 'kriteria') {
     try {
       const { results: criteria } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; name: string; weight: number }>()
-      const { results: evaluations } = await c.env.DB.prepare('SELECT * FROM evaluations').all<any>()
-      const rows = criteria.map((cr, idx) => {
-        const col = `c${idx + 1}_score`
-        const scores = evaluations.map(e => e[col] as number)
+      const { results: evalRows } = await c.env.DB.prepare('SELECT criteria_id, value FROM evaluations').all<{ criteria_id: string; value: number }>()
+      const scoresByCriteria = new Map<string, number[]>()
+      for (const row of evalRows) {
+        if (!scoresByCriteria.has(row.criteria_id)) scoresByCriteria.set(row.criteria_id, [])
+        scoresByCriteria.get(row.criteria_id)!.push(row.value)
+      }
+      const kriteriaData = criteria.map(cr => {
+        const scores = scoresByCriteria.get(cr.id) || []
         const avgRaw = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
         const max = scores.length ? Math.max(...scores) : 0
         const avgNorm = max === 0 ? 0 : avgRaw / max
         const contribution = avgNorm * cr.weight
-        return `
+        return { Kode: cr.id, Kriteria: cr.name, 'Avg Skor': +avgRaw.toFixed(2), 'Avg Normalisasi': +avgNorm.toFixed(3), Bobot: cr.weight, Kontribusi: +contribution.toFixed(3) }
+      })
+      const rows = kriteriaData.map(d => `
           <tr class="hover:bg-gray-800/50 transition-colors">
-            <td class="p-4 font-bold text-indigo-400">${cr.id}</td>
-            <td class="p-4 text-gray-200">${cr.name}</td>
-            <td class="p-4 text-white">${avgRaw.toFixed(2)}</td>
-            <td class="p-4 text-white">${avgNorm.toFixed(3)}</td>
-            <td class="p-4 text-gray-400">${cr.weight}</td>
-            <td class="p-4 font-bold text-emerald-400">${contribution.toFixed(3)}</td>
+            <td class="p-4 font-bold text-indigo-400">${d.Kode}</td>
+            <td class="p-4 text-gray-200">${d.Kriteria}</td>
+            <td class="p-4 text-white">${d['Avg Skor']}</td>
+            <td class="p-4 text-white">${d['Avg Normalisasi']}</td>
+            <td class="p-4 text-gray-400">${d.Bobot}</td>
+            <td class="p-4 font-bold text-emerald-400">${d.Kontribusi}</td>
           </tr>
-        `
-      }).join('')
+        `).join('')
       const content = `
         ${tabsNav}
+        <div class="flex gap-2 mb-4">
+          <button onclick="exportCSV(_kData,'kriteria')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">CSV</button>
+          <button onclick="exportXLSX(_kData,'kriteria','Per Kriteria')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">XLSX</button>
+          <button onclick="exportPDF(_kData,'kriteria','Laporan Per Kriteria',['Kode','Kriteria','Avg Skor','Avg Normalisasi','Bobot','Kontribusi'])" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">PDF</button>
+        </div>
         <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
           <table class="w-full text-left">
             <thead class="bg-gray-950 border-b border-gray-800">
@@ -956,6 +1085,12 @@ app.get('/results', requireStaff, async (c) => {
             <tbody class="divide-y divide-gray-800">${rows || '<tr><td colspan="6" class="p-8 text-center text-gray-500">Belum ada data evaluasi</td></tr>'}</tbody>
           </table>
         </div>
+        <script>
+          window._kData=${JSON.stringify(kriteriaData)};
+          function exportCSV(data,filename){if(!data.length)return;const h=Object.keys(data[0]);const csv=[h.join(','),...data.map(r=>h.map(k=>'"'+String(r[k]).replace(/"/g,'""')+'"').join(','))].join('\\n');const b=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=filename+'.csv';a.click()}
+          function exportXLSX(data,filename,sheet){const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,sheet);XLSX.writeFile(wb,filename+'.xlsx')}
+          function exportPDF(data,filename,title,cols){const doc=new jspdf.jsPDF({orientation:'landscape',unit:'mm',format:'a4'});doc.text(title,14,15);doc.autoTable({head:[cols],body:data.map(r=>cols.map(c=>r[c])),startY:20,styles:{fontSize:8}});doc.save(filename+'.pdf')}
+        </script>
       `
       return c.html(Layout({ title: 'Hasil per Kriteria', content, activePage: '/results', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
     } catch (e: any) {
@@ -966,30 +1101,67 @@ app.get('/results', requireStaff, async (c) => {
   if (tab === 'responden') {
     try {
       const { results: criteria } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; weight: number }>()
-      const { results: evaluations } = await c.env.DB.prepare(
-        'SELECT e.*, r.name, sr.final_score FROM evaluations e JOIN respondents r ON r.id = e.respondent_id LEFT JOIN saw_results sr ON sr.respondent_id = e.respondent_id ORDER BY CAST(SUBSTR(e.respondent_id, 2) AS INTEGER) ASC'
+      const criteriaIds = criteria.map(c => c.id)
+
+      // Fetch all evaluation rows with respondent info
+      const { results: evalRows } = await c.env.DB.prepare(
+        'SELECT e.respondent_id, e.criteria_id, e.value, r.name, sr.final_score FROM evaluations e JOIN respondents r ON r.id = e.respondent_id LEFT JOIN saw_results sr ON sr.respondent_id = e.respondent_id ORDER BY CAST(SUBSTR(e.respondent_id, 2) AS INTEGER) ASC'
       ).all<any>()
-      const maxes = criteria.map((_, idx) => {
-        const scores = evaluations.map(e => e[`c${idx + 1}_score`] as number)
-        return scores.length ? Math.max(...scores) : 0
+
+      // Pivot by respondent
+      const respondents = new Map<string, { name: string; final_score: number; scores: Map<string, number> }>()
+      for (const row of evalRows) {
+        if (!respondents.has(row.respondent_id)) {
+          respondents.set(row.respondent_id, { name: row.name, final_score: row.final_score ?? 0, scores: new Map() })
+        }
+        respondents.get(row.respondent_id)!.scores.set(row.criteria_id, row.value)
+      }
+
+      // Max per criteria
+      const maxes = new Map<string, number>()
+      for (const cid of criteriaIds) maxes.set(cid, 0)
+      for (const [, resp] of respondents) {
+        for (const [cid, val] of resp.scores) {
+          if (val > (maxes.get(cid) || 0)) maxes.set(cid, val)
+        }
+      }
+
+      const respondenData = [...respondents.entries()].map(([rid, resp]) => {
+        const row: Record<string, any> = { ID: rid, Nama: resp.name }
+        criteria.forEach(cr => { row[cr.id] = resp.scores.get(cr.id) || 0 })
+        row['Final Score'] = +resp.final_score.toFixed(3)
+        return row
       })
-      const header = criteria.map(cr => `<th class="p-3 text-gray-400 text-xs">${cr.id}</th>`).join('')
-      const rows = evaluations.map(e => {
-        const cells = criteria.map((cr, idx) => {
-          const raw = e[`c${idx + 1}_score`] as number
-          const contribution = maxes[idx] === 0 ? 0 : (raw / maxes[idx]) * cr.weight
+      const respondenCols = ['ID', 'Nama', ...criteriaIds, 'Final Score']
+      const header = criteriaIds.map(cid => `<th class="p-3 text-gray-400 text-xs">${cid}</th>`).join('')
+      const rows = [...respondents.entries()].map(([rid, resp]) => {
+        const cells = criteria.map(cr => {
+          const raw = resp.scores.get(cr.id) || 0
+          const max = maxes.get(cr.id) || 0
+          const contribution = max === 0 ? 0 : (raw / max) * cr.weight
           return `<td class="p-3 text-sm text-gray-300">${raw} <span class="text-gray-500">(${contribution.toFixed(3)})</span></td>`
         }).join('')
-        return `<tr class="hover:bg-gray-800/50 transition-colors"><td class="p-3 text-sm font-mono text-gray-500">${e.respondent_id}</td><td class="p-3 text-sm text-gray-200">${e.name}</td>${cells}<td class="p-3 text-sm font-bold text-emerald-400">${(e.final_score ?? 0).toFixed(3)}</td></tr>`
+        return `<tr class="hover:bg-gray-800/50 transition-colors"><td class="p-3 text-sm font-mono text-gray-500">${rid}</td><td class="p-3 text-sm text-gray-200">${resp.name}</td>${cells}<td class="p-3 text-sm font-bold text-emerald-400">${resp.final_score.toFixed(3)}</td></tr>`
       }).join('')
       const content = `
         ${tabsNav}
+        <div class="flex gap-2 mb-4">
+          <button onclick="exportCSV(_rData,'per-responden')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">CSV</button>
+          <button onclick="exportXLSX(_rData,'per-responden','Per Responden')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">XLSX</button>
+          <button onclick="exportPDF(_rData,'per-responden','Laporan Per Responden',${JSON.stringify(respondenCols)})" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">PDF</button>
+        </div>
         <div class="bg-gray-900 border border-gray-800 rounded-2xl overflow-x-auto shadow-xl">
           <table class="w-full text-left">
             <thead class="bg-gray-950 border-b border-gray-800"><tr><th class="p-3 text-gray-400 text-xs">ID</th><th class="p-3 text-gray-400 text-xs">Nama</th>${header}<th class="p-3 text-gray-400 text-xs">Final Score</th></tr></thead>
             <tbody class="divide-y divide-gray-800">${rows || `<tr><td colspan="${criteria.length + 3}" class="p-8 text-center text-gray-500">Belum ada data evaluasi</td></tr>`}</tbody>
           </table>
         </div>
+        <script>
+          window._rData=${JSON.stringify(respondenData)};
+          function exportCSV(data,filename){if(!data.length)return;const h=Object.keys(data[0]);const csv=[h.join(','),...data.map(r=>h.map(k=>'"'+String(r[k]).replace(/"/g,'""')+'"').join(','))].join('\\n');const b=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=filename+'.csv';a.click()}
+          function exportXLSX(data,filename,sheet){const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,sheet);XLSX.writeFile(wb,filename+'.xlsx')}
+          function exportPDF(data,filename,title,cols){const doc=new jspdf.jsPDF({orientation:'landscape',unit:'mm',format:'a4'});doc.text(title,14,15);doc.autoTable({head:[cols],body:data.map(r=>cols.map(c=>r[c])),startY:20,styles:{fontSize:8}});doc.save(filename+'.pdf')}
+        </script>
       `
       return c.html(Layout({ title: 'Hasil per Responden', content, activePage: '/results', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
     } catch (e: any) {
@@ -1029,6 +1201,13 @@ app.get('/results', requireStaff, async (c) => {
       respondent_id: string; name: string; email?: string; school?: string; consumer_type: string; final_score: number; satisfaction_level: string
     }>()
 
+    const allForExport = await c.env.DB.prepare(
+      `SELECT s.respondent_id, r.name, r.email, r.school, r.consumer_type, s.final_score, s.satisfaction_level FROM saw_results s JOIN respondents r ON s.respondent_id = r.id ${whereStr} ORDER BY s.final_score DESC`
+    ).bind(...params).all<{ respondent_id: string; name: string; email?: string; school?: string; consumer_type: string; final_score: number; satisfaction_level: string }>()
+    const summaryData = allForExport.results.map((r, i) => ({
+      Rank: i + 1, ID: r.respondent_id, Nama: r.name, Email: r.email || '', Sekolah: r.school || '', Tipe: r.consumer_type, 'Skor Akhir': +r.final_score.toFixed(4), 'Tingkat Kepuasan': r.satisfaction_level
+    }))
+
     const { results: stats } = await c.env.DB.prepare(
       'SELECT satisfaction_level, COUNT(*) as cnt FROM saw_results GROUP BY satisfaction_level'
     ).all<{ satisfaction_level: string; cnt: number }>()
@@ -1067,7 +1246,7 @@ app.get('/results', requireStaff, async (c) => {
             </tr>
           `
         }).join('')
-      : '<tr><td colspan="7" class="p-8 text-center text-gray-500">Belum ada hasil perhitungan. <a href="/saw-calculate" class="text-indigo-400 underline">Jalankan SAW</a></td></tr>'
+      : '<tr><td colspan="7" class="p-8 text-center text-gray-500">Belum ada hasil perhitungan. Jalankan evaluasi terlebih dahulu.</td></tr>'
 
     const filterActiveLevel = (val: string) => levelFilter === val ? 'selected' : ''
     const filterActiveType = (val: string) => typeFilter === val ? 'selected' : ''
@@ -1089,6 +1268,11 @@ app.get('/results', requireStaff, async (c) => {
 
     const content = `
       ${tabsNav}
+      <div class="flex gap-2 mb-4">
+        <button onclick="exportCSV(_sData,'ringkasan')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">CSV</button>
+        <button onclick="exportXLSX(_sData,'ringkasan','Ringkasan')" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">XLSX</button>
+        <button onclick="exportPDF(_sData,'ringkasan','Laporan Ringkasan',['Rank','ID','Nama','Email','Sekolah','Tipe','Skor Akhir','Tingkat Kepuasan'])" class="bg-gray-800 hover:bg-gray-700 text-white px-3 py-1.5 rounded-lg text-sm border border-gray-700">PDF</button>
+      </div>
       <!-- Statistics Cards -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
         <div class="bg-gray-900 border border-gray-800 p-5 rounded-xl text-center hover:border-emerald-800/50 transition-all">
@@ -1153,6 +1337,12 @@ app.get('/results', requireStaff, async (c) => {
         </table>
       </div>
       ${pagination}
+      <script>
+        window._sData=${JSON.stringify(summaryData)};
+        function exportCSV(data,filename){if(!data.length)return;const h=Object.keys(data[0]);const csv=[h.join(','),...data.map(r=>h.map(k=>'"'+String(r[k]).replace(/"/g,'""')+'"').join(','))].join('\\n');const b=new Blob(['\\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=filename+'.csv';a.click()}
+        function exportXLSX(data,filename,sheet){const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,sheet);XLSX.writeFile(wb,filename+'.xlsx')}
+        function exportPDF(data,filename,title,cols){const doc=new jspdf.jsPDF({orientation:'landscape',unit:'mm',format:'a4'});doc.text(title,14,15);doc.autoTable({head:[cols],body:data.map(r=>cols.map(c=>r[c])),startY:20,styles:{fontSize:8}});doc.save(filename+'.pdf')}
+      </script>
     `
 
     return c.html(Layout({ title: 'Hasil Keputusan', content, activePage: '/results', evaluasiEnabled: await getEvaluasiEnabled(c), staff: true }))
@@ -1214,46 +1404,6 @@ app.post('/master/toggle-evaluasi', requireStaff, async (c) => {
   const enabled = await getEvaluasiEnabled(c)
   await c.env.DB.prepare("UPDATE settings SET value = ? WHERE key = 'evaluasi_menu_enabled'").bind(enabled ? '0' : '1').run()
   return c.redirect('/master/schools')
-})
-
-app.get('/master/criteria', requireStaff, async (c) => {
-  const { results } = await c.env.DB.prepare('SELECT * FROM criteria ORDER BY id ASC').all<{ id: string; name: string; weight: number; type: string; question: string | null }>()
-  const totalWeight = results.reduce((s, r) => s + r.weight, 0)
-  const warn = Math.abs(totalWeight - 1.0) > 0.001
-  const rows = results.map(r => `
-    <form method="post" action="/master/criteria/${r.id}" class="p-5 border border-gray-800 rounded-xl bg-gray-950/50 mb-4">
-      <div class="flex items-center gap-3 mb-3">
-        <span class="text-indigo-400 font-bold">${r.id}</span>
-        <input type="text" name="name" value="${r.name}" required class="flex-1 bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm" />
-        <input type="number" step="0.01" name="weight" value="${r.weight}" required class="w-24 bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm" />
-        <select name="type" class="bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm">
-          <option value="Benefit" ${r.type === 'Benefit' ? 'selected' : ''}>Benefit</option>
-          <option value="Cost" ${r.type === 'Cost' ? 'selected' : ''}>Cost</option>
-        </select>
-      </div>
-      <textarea name="question" placeholder="Pertanyaan untuk form evaluasi" class="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2 text-sm mb-3">${r.question || ''}</textarea>
-      <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm">Simpan</button>
-    </form>
-  `).join('')
-  const evaluasiEnabled = await getEvaluasiEnabled(c)
-  const content = `
-    <h2 class="text-3xl font-bold text-white mb-2">Manage Kriteria</h2>
-    <p class="text-gray-400 mb-2">Total bobot = ${totalWeight.toFixed(2)}</p>
-    ${warn ? `<p class="text-amber-400 text-sm mb-4">⚠ Total bobot tidak sama dengan 1.0</p>` : ''}
-    ${rows}
-  `
-  return c.html(Layout({ title: 'Manage Kriteria', content, activePage: '/master/criteria', evaluasiEnabled, staff: true }))
-})
-
-app.post('/master/criteria/:id', requireStaff, async (c) => {
-  const body = await c.req.parseBody()
-  const id = c.req.param('id')
-  const name = String(body.name || '')
-  const weight = parseFloat(String(body.weight || '0'))
-  const type = String(body.type || 'Benefit')
-  const question = String(body.question || '')
-  await c.env.DB.prepare('UPDATE criteria SET name = ?, weight = ?, type = ?, question = ? WHERE id = ?').bind(name, weight, type, question, id).run()
-  return c.redirect('/master/criteria')
 })
 
 export default app
