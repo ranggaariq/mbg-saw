@@ -28,9 +28,27 @@ function generateName(isStaff) {
   return name;
 }
 
-function generateEmail(name, id) {
-  const clean = name.replace(/[^a-zA-Z ]/g, '').toLowerCase().trim().split(' ').slice(0, 2).join('.');
-  return `${clean}.${id.toLowerCase()}@mbg-eval.id`;
+const usedEmails = new Set();
+const emailDomains = ['gmail.com', 'yahoo.com', 'outlook.co.id', 'gmail.co.id'];
+
+function generateEmail(name) {
+  // Strip titles like Dr., Ir., Bpk., Ibu, etc.
+  let cleanName = name;
+  titles.forEach(title => {
+    cleanName = cleanName.replace(title, '');
+  });
+  const parts = cleanName.replace(/[^a-zA-Z ]/g, '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const base = parts.slice(0, 2).join('.');
+  const domain = emailDomains[getRandomInt(0, emailDomains.length - 1)];
+  
+  let num = getRandomInt(11, 99);
+  let email = `${base}${num}@${domain}`;
+  while (usedEmails.has(email)) {
+    num = getRandomInt(100, 999);
+    email = `${base}${num}@${domain}`;
+  }
+  usedEmails.add(email);
+  return email;
 }
 
 let sql = `-- ============================================
@@ -92,19 +110,19 @@ INSERT INTO criteria (id, name, weight, type) VALUES ('C8', 'Pelayanan Petugas',
 
 `;
 
-// Generate 500 respondents (400 Murid, 100 Staff)
+// Generate 100 respondents (80 Murid, 20 Staff)
 const respondents = [];
-for (let i = 1; i <= 500; i++) {
-  const isStaff = i > 400;
+for (let i = 1; i <= 100; i++) {
+  const isStaff = i > 80;
   const consumerType = isStaff ? 'Staff' : 'Murid';
   const name = generateName(isStaff);
   const id = `A${i}`;
-  const email = generateEmail(name, id);
+  const email = generateEmail(name);
   const school = schools[getRandomInt(0, schools.length - 1)];
   respondents.push({ id, name, email, school, consumerType });
 }
 
-sql += "-- DML: Respondents Seed Data (400 Murid + 100 Staff = 500 Total)\n";
+sql += "-- DML: Respondents Seed Data (80 Murid + 20 Staff = 100 Total)\n";
 respondents.forEach(r => {
   const escapedName = r.name.replace(/'/g, "''");
   sql += `INSERT INTO respondents (id, name, email, school, consumer_type) VALUES ('${r.id}', '${escapedName}', '${r.email}', '${r.school}', '${r.consumerType}');\n`;
@@ -118,4 +136,5 @@ respondents.forEach(r => {
 });
 
 fs.writeFileSync(path.join(__dirname, 'schema.sql'), sql);
-console.log('schema.sql generated successfully with 500 respondents (with email & school) and 500 evaluations.');
+console.log('schema.sql generated successfully with 100 respondents (with realistic email & school) and 100 evaluations.');
+
