@@ -10,6 +10,8 @@ Panduan ini menjelaskan cara menjalankan project **sepenuhnya di komputer lokal*
 - Tanpa deploy ke internet
 - Data tersimpan di **file SQLite lokal** di komputer kamu
 
+Panduan mendukung **Windows, macOS, dan Linux** — ikuti bagian sesuai OS kamu.
+
 > **Catatan penting:** "Lokal" di sini bukan berarti offline total. `npm install`
 > (mengunduh dependensi) dan CDN frontend (Tailwind, Chart.js, jsPDF, XLSX) tetap
 > membutuhkan koneksi internet. Yang tidak dibutuhkan adalah koneksi ke akun/produk
@@ -23,7 +25,49 @@ Panduan ini menjelaskan cara menjalankan project **sepenuhnya di komputer lokal*
 (lewat Miniflare), jadi satu-satunya yang wajib adalah **Node.js versi 20+**
 (disarankan LTS terbaru).
 
-### 1a. Ubuntu / Debian (lewat nvm — disarankan)
+Ikuti bagian sesuai OS kamu (1a Windows / 1b macOS / 1c Linux), lalu lanjut ke bagian 2.
+
+### 1a. Windows
+
+1. **Install Node.js LTS**
+   - Download installer di <https://nodejs.org> (tombol **LTS**), jalankan, klik Next
+     sampai selesai — pastikan opsi **"Add to PATH"** tercentang (default sudah).
+   - Atau lewat PowerShell: `winget install OpenJS.NodeJS.LTS`
+
+2. **Install Git for Windows** (sekalian dapat Git Bash)
+   - Download di <https://git-scm.com/download/win>, install dengan opsi default.
+   - Git Bash memungkinkan semua perintah `bash` di panduan ini dijalankan sama persis,
+     jadi sangat disarankan.
+
+3. **Buka terminal** — pilih salah satu:
+   - **Git Bash** (disarankan): klik kanan di dalam folder project → "Git Bash Here", atau
+   - **PowerShell**: perintah yang beda akan diberi label `(PowerShell)` di panduan ini.
+
+4. **Verifikasi** (jalankan di Git Bash / PowerShell):
+
+   ```bash
+   node -v   # harus muncul versi, mis. v22.x
+   npm -v    # harus muncul versi, mis. 10.x
+   ```
+
+> Catatan khusus Windows:
+> - Wrangler berjalan normal di Windows — binary `workerd` versi Windows otomatis
+>   ter-install saat `npm install`, tidak perlu diurus manual.
+> - Saat pertama kali `wrangler dev` jalan, Windows Defender Firewall mungkin muncul
+>   popup — klik **Allow**.
+> - Disarankan clone project di path tanpa spasi/karakter aneh (mis. `C:\projects\mbg-saw`),
+>   hindari folder OneDrive/Desktop.
+
+### 1b. macOS
+
+```bash
+# Cara 1: Homebrew (paling praktis kalau sudah ada Homebrew)
+brew install node
+
+# Cara 2: nvm (sama seperti bagian Linux di bawah)
+```
+
+### 1c. Ubuntu / Debian (Linux)
 
 ```bash
 # 1. Install nvm (Node Version Manager)
@@ -40,43 +84,36 @@ node -v   # harus muncul versi, mis. v22.x
 npm -v    # harus muncul versi, mis. 10.x
 ```
 
-### 1b. macOS
+### 1d. Tabel Perintah Setara antar OS
 
-```bash
-# Kalau sudah punya Homebrew:
-brew install node
+Beberapa perintah di panduan ini berbeda antar OS. Simpan tabel ini sebagai contekan
+(penting kalau pakai Windows PowerShell):
 
-# Atau pakai nvm (sama seperti langkah 1a di atas)
-```
-
-### 1c. Windows
-
-1. Download installer LTS dari <https://nodejs.org>
-2. Jalankan installer (klik Next sampai selesai, centang "Add to PATH")
-3. Buka **PowerShell** / **Git Bash**, lalu verifikasi:
-
-```powershell
-node -v
-npm -v
-```
-
-> Alternatif cepat (PowerShell): `winget install OpenJS.NodeJS.LTS`
->
-> Tips: untuk perintah-perintah `bash` di panduan ini, disarankan pakai **Git Bash**
-> di Windows supaya semua perintah bisa dijalankan sama persis.
+| Aksi | Linux / macOS / Git Bash | Windows PowerShell |
+| --- | --- | --- |
+| Buat file `.dev.vars` | `cat > .dev.vars << 'EOF' ... EOF` | Perintah `Set-Content` (lihat bagian 3) |
+| Hapus folder database | `rm -rf .wrangler/state` | `Remove-Item -Recurse -Force .wrangler\state` |
+| Matikan telemetri wrangler | `export WRANGLER_SEND_METRICS=false` | `$env:WRANGLER_SEND_METRICS="false"` |
+| Jalankan dev server | `npm run dev` | `npm run dev` (sama) |
+| Ganti port | `npx wrangler dev --port 8788` | sama |
 
 ---
 
 ## 2. Clone & Install Dependensi
+
+**Windows PowerShell / Git Bash:**
 
 ```bash
 # 1. Clone repository
 git clone <URL-REPOSITORY> mbg-saw
 cd mbg-saw
 
-# 2. Install dependensi (butuh internet, ~1-2 menit)
+# 2. Install dependensi (butuh internet, beberapa menit)
 npm install
 ```
+
+> Semua perintah `npm` di panduan ini berjalan sama di semua OS — npm sudah
+> mengurus perbedaan platform secara otomatis.
 
 ---
 
@@ -85,8 +122,20 @@ npm install
 File ini berisi kredensial login staff dan secret session. **Tanpa file ini aplikasi
 tidak bisa jalan** (error `STAFF_USERNAME` dsb.).
 
+Isi file (sama untuk semua OS):
+
+```
+STAFF_USERNAME=admin
+STAFF_PASSWORD=ganti_password_ini
+SESSION_SECRET=ubah-ke-string-acak-panjang-minimal-32-karakter
+```
+
+Cara membuatnya — pilih sesuai OS kamu:
+
+**Linux / macOS / Git Bash (Windows):**
+
 ```bash
-# Di folder project (Linux/macOS/Git Bash):
+# Di folder project:
 cat > .dev.vars << 'EOF'
 STAFF_USERNAME=admin
 STAFF_PASSWORD=ganti_password_ini
@@ -94,14 +143,24 @@ SESSION_SECRET=ubah-ke-string-acak-panjang-minimal-32-karakter
 EOF
 ```
 
+**Windows PowerShell:**
+
+```powershell
+@"
+STAFF_USERNAME=admin
+STAFF_PASSWORD=ganti_password_ini
+SESSION_SECRET=ubah-ke-string-acak-panjang-minimal-32-karakter
+"@ | Set-Content -Encoding utf8 .dev.vars
+```
+
 - `STAFF_USERNAME` / `STAFF_PASSWORD` = akun untuk login staff
 - `SESSION_SECRET` = string acak panjang (untuk tanda tangan cookie session)
 
-> Windows (tanpa Git Bash): buat file baru bernama `.dev.vars` (tanpa ekstensi lain)
-> di folder project pakai Notepad, isi dengan 3 baris di atas, lalu simpan.
+> File `.dev.vars` sudah masuk `.gitignore`, jadi kredensial tidak ikut ter-commit
+> ke git. Jangan pernah share file ini.
 >
-> File `.dev.vars` sudah masuk `.gitignore`, jadi kredensialmu tidak akan ikut
-> ter-commit ke git. Jangan pernah share file ini.
+> **Kalau file ini baru dibuat/diubah, restart dev server** — env hanya dibaca saat
+> server mulai.
 
 ---
 
@@ -143,6 +202,9 @@ Setelah muncul log seperti ini, aplikasi sudah jalan:
 
 Buka **<http://localhost:8787>** di browser. Dashboard dan hasil keputusan bisa
 diakses tanpa login.
+
+> Di Windows, saat pertama kali jalankan, izinkan akses di popup **Windows Defender
+> Firewall** (klik Allow) — ini normal untuk dev server lokal.
 
 Halaman-halaman utama:
 
@@ -190,11 +252,20 @@ Buka `/results` untuk melihat peringkat K1–K4.
 - Database lokal tersimpan di folder **`.wrangler/state/`** (file SQLite).
 - Folder ini sudah masuk `.gitignore` — tidak ikut ter-commit.
 
-**Reset database ke kondisi awal:**
+**Reset database ke kondisi awal** (jalankan setelah dev server dihentikan dengan Ctrl+C):
+
+**Linux / macOS / Git Bash:**
 
 ```bash
-# Hentikan dev server (Ctrl+C), lalu:
 rm -rf .wrangler/state
+npm run db:init
+npm run dev
+```
+
+**Windows PowerShell:**
+
+```powershell
+Remove-Item -Recurse -Force .wrangler\state
 npm run db:init
 npm run dev
 ```
@@ -210,8 +281,12 @@ npm run dev
 | Error `no such table: criteria` / `D1_ERROR` | Database belum di-init. Jalankan `npm run db:init`. |
 | Port `8787` sudah dipakai | `npx wrangler dev --port 8788` (ganti port sesuka kamu). |
 | Login selalu "Username atau password salah" | Cek isi `.dev.vars`. Kalau baru diedit, restart dev server (Ctrl+C lalu `npm run dev` lagi). |
-| Muncul pertanyaan telemetri dari Wrangler | Jawab `n`, atau matikan permanen: `export WRANGLER_SEND_METRICS=false` (Windows PowerShell: `$env:WRANGLER_SEND_METRICS="false"`). |
+| Muncul pertanyaan telemetri dari Wrangler | Jawab `n`, atau matikan permanen: `export WRANGLER_SEND_METRICS=false` (PowerShell: `$env:WRANGLER_SEND_METRICS="false"`). |
 | Grafik / tombol export (PDF/XLSX) tidak muncul | Frontend memuat library dari CDN — pastikan ada koneksi internet. |
+| **Windows:** popup Windows Defender Firewall muncul | Klik **Allow** — itu akses untuk dev server lokal. |
+| **Windows:** PowerShell menolak menjalankan script | Pakai **Git Bash** (disarankan), atau `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` di PowerShell. |
+| **Windows:** `.dev.vars` tidak terbaca padahal sudah dibuat | Pastikan file bernama persis `.dev.vars` (bukan `.dev.vars.txt`). Cek dengan `ls -la` di Git Bash, atau buat ulang lewat perintah di bagian 3. |
+| **Windows:** error aneh soal path (spasi/unicode) | Clone project di path sederhana tanpa spasi, mis. `C:\projects\mbg-saw`. |
 
 ---
 
